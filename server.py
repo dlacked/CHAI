@@ -16,6 +16,13 @@ if not WEIGHTS_PATH.exists():
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
+@app.after_request
+def add_header(response):
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
 @app.route('/')
 def index():
     return app.send_static_file('index.html')

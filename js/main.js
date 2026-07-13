@@ -178,6 +178,79 @@ const redrawCanvas = () => {
         ctx.stroke();
     }
 
+    // Draw FDI if checked
+    if (fdiCb.checked && !fdiCb.disabled && predictions) {
+        const fdiStatus = document.getElementById('fdi-status');
+        if (predictions.length !== 12) {
+            if (fdiStatus) {
+                fdiStatus.textContent = ' Requires 12';
+                fdiStatus.style.color = '#f44336';
+            }
+        } else {
+            if (fdiStatus) {
+                fdiStatus.textContent = ' Active';
+                fdiStatus.style.color = '#4caf50';
+            }
+
+            // Sort predictions left-to-right (horizontal center)
+            const sortedPreds = [...predictions].sort((a, b) => {
+                const centerX_A = (a.box[0] + a.box[2]) / 2;
+                const centerX_B = (b.box[0] + b.box[2]) / 2;
+                return centerX_A - centerX_B;
+            });
+
+            // Get the mapped array based on classification
+            let fdiLabels = [];
+            if (isLower) {
+                fdiLabels = [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36];
+            } else if (isUpper) {
+                fdiLabels = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
+            }
+
+            if (fdiLabels.length === 12) {
+                sortedPreds.forEach((pred, idx) => {
+                    const centerX = (pred.box[0] + pred.box[2]) / 2;
+                    const centerY = (pred.box[1] + pred.box[3]) / 2;
+
+                    const boxWidth = 55;
+                    const boxHeight = 36;
+                    const rx = centerX - boxWidth / 2;
+                    const ry = centerY - boxHeight / 2;
+
+                    // Draw background rounded rectangle
+                    ctx.beginPath();
+                    if (typeof ctx.roundRect === 'function') {
+                        ctx.roundRect(rx, ry, boxWidth, boxHeight, 6);
+                    } else {
+                        ctx.rect(rx, ry, boxWidth, boxHeight);
+                    }
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+
+                    // Draw index text (Top line: #0 ~ #11)
+                    ctx.font = 'bold 11px sans-serif';
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(`#${idx}`, centerX, ry + 4);
+
+                    // Draw FDI text (Bottom line: FDI number)
+                    ctx.font = 'bold 16px sans-serif';
+                    ctx.fillStyle = '#00ffff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(String(fdiLabels[idx]), centerX, ry + boxHeight - 3);
+                });
+            }
+        }
+    } else {
+        const fdiStatus = document.getElementById('fdi-status');
+        if (fdiStatus && !fdiCb.disabled) fdiStatus.textContent = '';
+    }
+
     ctx.restore();
 };
 
@@ -432,7 +505,11 @@ const updateCheckboxStates = () => {
     if (mstCb.disabled) mstCb.checked = false;
 
     fdiCb.disabled = !mstCb.checked;
-    if (fdiCb.disabled) fdiCb.checked = false;
+    if (fdiCb.disabled) {
+        fdiCb.checked = false;
+        const fdiStatus = document.getElementById('fdi-status');
+        if (fdiStatus) fdiStatus.textContent = '';
+    }
 };
 
 jawCb.addEventListener('change', () => {
@@ -461,7 +538,16 @@ pcaCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });
-mstCb.addEventListener('change', updateCheckboxStates);
+
+mstCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
+});
+
+fdiCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
+});
 
 // Initialize states
 jawCb.disabled = true;
