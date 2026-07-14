@@ -6,7 +6,7 @@ const fileStatus = document.getElementById('oral-image-status');
 const jawCb = document.getElementById('jaw-classification-checkbox');
 const yoloCb = document.getElementById('yolov8-seg-checkbox');
 const pcaCb = document.getElementById('pca-checkbox');
-const mstCb = document.getElementById('mst-checkbox');
+const archPathCb = document.getElementById('arch-path-checkbox');
 const gapCb = document.getElementById('gap-checkbox');
 const fdiCb = document.getElementById('fdi-checkbox');
 
@@ -118,59 +118,6 @@ const computeCentroid = (polygon) => {
     return { x: sumX / polygon.length, y: sumY / polygon.length };
 };
 
-const computeMST = (vertices) => {
-    const n = vertices.length;
-    if (n === 0) return [];
-
-    const inMST = new Array(n).fill(false);
-    const minEdge = new Array(n).fill(Infinity);
-    const parent = new Array(n).fill(-1);
-
-    minEdge[0] = 0;
-    const edges = [];
-
-    for (let count = 0; count < n; count++) {
-        let u = -1;
-        let minVal = Infinity;
-        for (let i = 0; i < n; i++) {
-            if (!inMST[i] && minEdge[i] < minVal) {
-                minVal = minEdge[i];
-                u = i;
-            }
-        }
-
-        if (u === -1) break;
-
-        inMST[u] = true;
-
-        if (parent[u] !== -1) {
-            const p = parent[u];
-            const dx = vertices[u].x - vertices[p].x;
-            const dy = vertices[u].y - vertices[p].y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            edges.push({
-                u,
-                v: p,
-                weight: dist
-            });
-        }
-
-        for (let v = 0; v < n; v++) {
-            if (!inMST[v]) {
-                const dx = vertices[u].x - vertices[v].x;
-                const dy = vertices[u].y - vertices[v].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < minEdge[v]) {
-                    minEdge[v] = dist;
-                    parent[v] = u;
-                }
-            }
-        }
-    }
-
-    return edges;
-};
-
 // Two adjacent teeth whose normalized gap is at or below this are considered touching
 const TOUCH_NORM_WEIGHT = 0.05;
 
@@ -199,17 +146,12 @@ const getClosestPolygonPoints = (polyA, polyB) => {
     return { distance: minDist, ptA, ptB };
 };
 
-// Walks the MST from the leftmost tooth, always stepping to the leftmost unvisited
-// neighbor next. For an arch-shaped set of points this reproduces the true left-to-right
-// tooth sequence far more reliably than sorting all teeth by X directly (which breaks down
-// wherever the arch curves back on itself, e.g. the posterior teeth).
-const computeMstOrder = (vertices, mstEdges, pca) => {
+// Builds a path through all teeth via nearest-neighbor greedy: starting from the leftmost
+// tooth, repeatedly jump to the closest unvisited tooth. Unlike a general MST, this always
+// produces a simple chain - no tooth can end up with more than two neighbors.
+const computeArchOrder = (vertices, pca) => {
     const n = vertices.length;
-    const adj = Array.from({ length: n }, () => []);
-    mstEdges.forEach(edge => {
-        adj[edge.u].push(edge.v);
-        adj[edge.v].push(edge.u);
-    });
+    if (n === 0) return [];
 
     const getRotatedX = (pt) => {
         if (!pca) return pt.x;
@@ -229,17 +171,26 @@ const computeMstOrder = (vertices, mstEdges, pca) => {
     });
 
     const visited = new Array(n).fill(false);
-    const order = [];
-    const stack = [startIdx];
-    while (stack.length > 0 && order.length < n) {
-        const idx = stack.pop();
-        if (visited[idx]) continue;
-        visited[idx] = true;
-        order.push(idx);
-        const neighbors = adj[idx]
-            .filter(nb => !visited[nb])
-            .sort((a, b) => getRotatedX(vertices[b]) - getRotatedX(vertices[a]));
-        neighbors.forEach(nb => stack.push(nb));
+    visited[startIdx] = true;
+    const order = [startIdx];
+
+    while (order.length < n) {
+        const curr = vertices[order[order.length - 1]];
+        let nextIdx = -1;
+        let minDist = Infinity;
+        for (let i = 0; i < n; i++) {
+            if (visited[i]) continue;
+            const dx = vertices[i].x - curr.x;
+            const dy = vertices[i].y - curr.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < minDist) {
+                minDist = dist;
+                nextIdx = i;
+            }
+        }
+        if (nextIdx === -1) break;
+        visited[nextIdx] = true;
+        order.push(nextIdx);
     }
     return order;
 };
@@ -310,7 +261,7 @@ const computeGapNormWeight = (predictions, idxA, idxB, W_pca, H_pca, pca) => {
     return { normWeight, ptA: res.ptA, ptB: res.ptB };
 };
 
-// Walks the MST order and splits it into groups wherever two consecutive teeth are not
+// Walks the arch order and splits it into groups wherever two consecutive teeth are not
 // touching (normalized gap > TOUCH_NORM_WEIGHT). A missing tooth breaks the chain, so a
 // single image can produce more than one group - the break between groups is the gap left
 // by the missing tooth.
@@ -401,30 +352,30 @@ const redrawCanvas = () => {
         ctx.stroke();
     }
 
-    // Draw MST if checked
-    if (mstCb.checked && !mstCb.disabled && predictions) {
-        const mstStatus = document.getElementById('mst-status');
+    // Draw Arch Path if checked
+    if (archPathCb.checked && !archPathCb.disabled && predictions) {
+        const archPathStatus = document.getElementById('arch-path-status');
         if (predictions.length < 2) {
-            if (mstStatus) {
-                mstStatus.textContent = ' Requires 2+';
-                mstStatus.style.color = '#f44336';
+            if (archPathStatus) {
+                archPathStatus.textContent = ' Requires 2+';
+                archPathStatus.style.color = '#f44336';
             }
         } else {
-            if (mstStatus) {
-                mstStatus.textContent = ' Active';
-                mstStatus.style.color = '#4caf50';
+            if (archPathStatus) {
+                archPathStatus.textContent = ' Active';
+                archPathStatus.style.color = '#4caf50';
             }
 
             // Compute centroids
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
 
-            // Compute MST edges
-            const mstEdges = computeMST(vertices);
+            // Nearest-neighbor greedy order through all teeth
+            const order = computeArchOrder(vertices, pca);
 
-            // Draw MST edges (dashed lines) - no distance labels for now
-            mstEdges.forEach(edge => {
-                const uPt = vertices[edge.u];
-                const vPt = vertices[edge.v];
+            // Draw path edges (dashed lines) - no distance labels for now
+            for (let i = 0; i < order.length - 1; i++) {
+                const uPt = vertices[order[i]];
+                const vPt = vertices[order[i + 1]];
 
                 ctx.beginPath();
                 ctx.moveTo(uPt.x, uPt.y);
@@ -434,7 +385,7 @@ const redrawCanvas = () => {
                 ctx.setLineDash([5, 5]);
                 ctx.stroke();
                 ctx.setLineDash([]); // Reset
-            });
+            }
 
             // Draw vertices (centroids)
             vertices.forEach(pt => {
@@ -449,8 +400,8 @@ const redrawCanvas = () => {
 
         }
     } else {
-        const mstStatus = document.getElementById('mst-status');
-        if (mstStatus && !mstCb.disabled) mstStatus.textContent = '';
+        const archPathStatus = document.getElementById('arch-path-status');
+        if (archPathStatus && !archPathCb.disabled) archPathStatus.textContent = '';
     }
 
     // Draw Segment Gap if checked - labels the distance for teeth that are NOT touching
@@ -467,12 +418,11 @@ const redrawCanvas = () => {
                 gapStatus.style.color = '#4caf50';
             }
 
-            // Walk the tooth arch in MST order and compare each tooth's segment only to the
-            // next one in that order - this follows the arch's actual curve (unlike a plain
-            // X-sort, which breaks down where the arch bends back at the posterior teeth)
+            // Walk the tooth arch in nearest-neighbor order and compare each tooth's segment
+            // only to the next one in that order - this follows the arch's actual curve
+            // (unlike a plain X-sort, which breaks down where the arch bends back on itself)
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-            const mstEdges = computeMST(vertices);
-            const order = computeMstOrder(vertices, mstEdges, pca);
+            const order = computeArchOrder(vertices, pca);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
 
             for (let i = 0; i < order.length - 1; i++) {
@@ -486,7 +436,7 @@ const redrawCanvas = () => {
                 ctx.beginPath();
                 ctx.moveTo(ptA[0], ptA[1]);
                 ctx.lineTo(ptB[0], ptB[1]);
-                ctx.strokeStyle = '#ff3366'; // Neon pink - distinguishes gaps from MST's green
+                ctx.strokeStyle = '#ff3366'; // Neon pink - distinguishes gaps from the Arch Path's green
                 ctx.lineWidth = 2.5;
                 ctx.setLineDash([5, 5]);
                 ctx.stroke();
@@ -548,7 +498,7 @@ const redrawCanvas = () => {
         if (gapStatus && !gapCb.disabled) gapStatus.textContent = '';
     }
 
-    // Draw FDI numbers if checked - labels teeth in MST arch order regardless of tooth count
+    // Draw FDI numbers if checked - labels teeth in nearest-neighbor arch order regardless of tooth count
     if (fdiCb.checked && !fdiCb.disabled && predictions) {
         const fdiStatus = document.getElementById('fdi-status');
 
@@ -564,8 +514,7 @@ const redrawCanvas = () => {
             }
 
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-            const mstEdges = computeMST(vertices);
-            const order = computeMstOrder(vertices, mstEdges, pca);
+            const order = computeArchOrder(vertices, pca);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
 
             // Teeth that are touching share one group; a break between groups is a missing
@@ -872,12 +821,12 @@ const updateCheckboxStates = () => {
     pcaCb.disabled = !yoloCb.checked;
     if (pcaCb.disabled) pcaCb.checked = false;
 
-    // MST is enabled when Tooth Segmentation is checked
-    mstCb.disabled = !yoloCb.checked;
-    if (mstCb.disabled) {
-        mstCb.checked = false;
-        const mstStatus = document.getElementById('mst-status');
-        if (mstStatus) mstStatus.textContent = '';
+    // Arch Path is enabled when Tooth Segmentation is checked
+    archPathCb.disabled = !yoloCb.checked;
+    if (archPathCb.disabled) {
+        archPathCb.checked = false;
+        const archPathStatus = document.getElementById('arch-path-status');
+        if (archPathStatus) archPathStatus.textContent = '';
     }
 
     // Segment Gap is enabled when Tooth Segmentation is checked
@@ -924,7 +873,7 @@ pcaCb.addEventListener('change', () => {
     redrawCanvas();
 });
 
-mstCb.addEventListener('change', () => {
+archPathCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });
