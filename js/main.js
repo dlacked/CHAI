@@ -280,6 +280,23 @@ const computeArchGroups = (predictions, order, W_pca, H_pca, pca) => {
     return groups;
 };
 
+// Assigns each tooth in the arch order an FDI slot (0-11), leaving the slot gap left by a
+// missing tooth wherever two consecutive teeth are not touching. Returns an array indexed by
+// the original prediction index (values are -1 for teeth that don't fit within 12 slots).
+const computeArchSlots = (predictions, order, W_pca, H_pca, pca) => {
+    const slots = new Array(predictions.length).fill(-1);
+    let slot = 0;
+    order.forEach((idx, i) => {
+        if (i > 0) {
+            const gap = computeGapNormWeight(predictions, order[i - 1], idx, W_pca, H_pca, pca);
+            if (!gap || gap.normWeight > TOUCH_NORM_WEIGHT) slot += 1; // skip the missing tooth's slot
+        }
+        slots[idx] = slot;
+        slot += 1;
+    });
+    return slots;
+};
+
 const redrawCanvas = () => {
     if (!currentImage) return;
 
@@ -425,12 +442,18 @@ const redrawCanvas = () => {
             const order = computeArchOrder(vertices, pca);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
 
+            // Needed to label each gap with the FDI number of the tooth that's missing there
+            const slots = hasClassification ? computeArchSlots(predictions, order, W_pca, H_pca, pca) : null;
+            const fdiLabels = isLower
+                ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
+                : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
+
             for (let i = 0; i < order.length - 1; i++) {
                 const gap = computeGapNormWeight(predictions, order[i], order[i + 1], W_pca, H_pca, pca);
                 if (!gap) continue;
                 if (gap.normWeight <= TOUCH_NORM_WEIGHT) continue; // touching - not a gap
 
-                const { ptA, ptB, normWeight } = gap;
+                const { ptA, ptB } = gap;
 
                 // Draw gap edge (dashed line) between the two closest polygon points
                 ctx.beginPath();
@@ -442,10 +465,16 @@ const redrawCanvas = () => {
                 ctx.stroke();
                 ctx.setLineDash([]); // Reset
 
-                // Draw a two-line label at the middle of the edge: distance value, then "LOSS" below it
+                // The missing tooth's FDI number sits in the slot right after the tooth before the gap
+                const missingSlot = slots ? slots[order[i]] + 1 : -1;
+                const missingLabel = missingSlot >= 0 && missingSlot < fdiLabels.length
+                    ? String(fdiLabels[missingSlot])
+                    : '?';
+
+                // Draw a two-line label at the middle of the edge: missing FDI number, then "LOSS" below it
                 const midX = (ptA[0] + ptB[0]) / 2;
                 const midY = (ptA[1] + ptB[1]) / 2;
-                const valText = normWeight.toFixed(2);
+                const valText = missingLabel;
                 const lossText = 'LOSS';
 
                 ctx.font = 'bold 28px sans-serif';
@@ -478,16 +507,16 @@ const redrawCanvas = () => {
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                // Distance value (top line)
+                // Missing FDI number (top line, red)
                 ctx.font = 'bold 28px sans-serif';
-                ctx.fillStyle = '#ffffff';
+                ctx.fillStyle = '#ff3366';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
                 ctx.fillText(valText, midX, valY);
 
-                // "LOSS" label (bottom line)
+                // "LOSS" label (bottom line, white)
                 ctx.font = 'bold 20px sans-serif';
-                ctx.fillStyle = '#ff3366';
+                ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
                 ctx.fillText(lossText, midX, lossY);
@@ -508,11 +537,6 @@ const redrawCanvas = () => {
                 fdiStatus.style.color = '#f44336';
             }
         } else {
-            if (fdiStatus) {
-                fdiStatus.textContent = ' Active';
-                fdiStatus.style.color = '#4caf50';
-            }
-
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
             const order = computeArchOrder(vertices, pca);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
@@ -521,19 +545,29 @@ const redrawCanvas = () => {
             // tooth, so skip one FDI slot there before labeling the next group
             const groups = computeArchGroups(predictions, order, W_pca, H_pca, pca);
 
-            const fdiLabels = isLower
-                ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
-                : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
+            // Fewer than 12 teeth with no detected gap means we can't tell where the missing
+            // tooth actually is (it could be at either end of the arch) - skip labeling rather
+            // than guess
+            if (predictions.length < 12 && groups.length === 1) {
+                if (fdiStatus) {
+                    fdiStatus.textContent = ' Gap Undetected';
+                    fdiStatus.style.color = '#f44336';
+                }
+            } else {
+                if (fdiStatus) {
+                    fdiStatus.textContent = ' Active';
+                    fdiStatus.style.color = '#4caf50';
+                }
 
-            let slot = 0;
-            groups.forEach((group, groupIdx) => {
-                if (groupIdx > 0) slot += 1; // skip the FDI slot left by the missing tooth
+                const fdiLabels = isLower
+                    ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
+                    : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
 
-                group.forEach(vertexIdx => {
-                    if (slot >= fdiLabels.length) {
-                        slot += 1;
-                        return;
-                    }
+                const slots = computeArchSlots(predictions, order, W_pca, H_pca, pca);
+
+                order.forEach(vertexIdx => {
+                    const slot = slots[vertexIdx];
+                    if (slot < 0 || slot >= fdiLabels.length) return;
 
                     const pred = predictions[vertexIdx];
                     const centerX = (pred.box[0] + pred.box[2]) / 2;
@@ -561,10 +595,8 @@ const redrawCanvas = () => {
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(String(fdiLabels[slot]), centerX, centerY + 1);
-
-                    slot += 1;
                 });
-            });
+            }
         }
     } else {
         const fdiStatus = document.getElementById('fdi-status');
@@ -821,24 +853,24 @@ const updateCheckboxStates = () => {
     pcaCb.disabled = !yoloCb.checked;
     if (pcaCb.disabled) pcaCb.checked = false;
 
-    // Arch Path is enabled when Tooth Segmentation is checked
-    archPathCb.disabled = !yoloCb.checked;
+    // Arch Path is enabled when PCA is checked
+    archPathCb.disabled = !pcaCb.checked;
     if (archPathCb.disabled) {
         archPathCb.checked = false;
         const archPathStatus = document.getElementById('arch-path-status');
         if (archPathStatus) archPathStatus.textContent = '';
     }
 
-    // Segment Gap is enabled when Tooth Segmentation is checked
-    gapCb.disabled = !yoloCb.checked;
+    // Segment Gap is enabled when Arch Path is checked
+    gapCb.disabled = !archPathCb.checked;
     if (gapCb.disabled) {
         gapCb.checked = false;
         const gapStatus = document.getElementById('gap-status');
         if (gapStatus) gapStatus.textContent = '';
     }
 
-    // FDI is enabled when Tooth Segmentation is checked
-    fdiCb.disabled = !yoloCb.checked;
+    // FDI is enabled when Segment Gap is checked
+    fdiCb.disabled = !gapCb.checked;
     if (fdiCb.disabled) {
         fdiCb.checked = false;
         const fdiStatus = document.getElementById('fdi-status');
