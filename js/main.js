@@ -7,6 +7,8 @@ const jawCb = document.getElementById('jaw-classification-checkbox');
 const yoloCb = document.getElementById('yolov8-seg-checkbox');
 const pcaCb = document.getElementById('pca-checkbox');
 const mstCb = document.getElementById('mst-checkbox');
+const gapCb = document.getElementById('gap-checkbox');
+const fdiCb = document.getElementById('fdi-checkbox');
 
 
 let imageFiles = [];
@@ -169,6 +171,164 @@ const computeMST = (vertices) => {
     return edges;
 };
 
+// Two adjacent teeth whose normalized gap is at or below this are considered touching
+const TOUCH_NORM_WEIGHT = 0.05;
+
+// Finds the closest pair of points between two tooth polygons (the actual segment-to-segment gap)
+const getClosestPolygonPoints = (polyA, polyB) => {
+    let minDist = Infinity;
+    let ptA = null;
+    let ptB = null;
+    if (!polyA || !polyB || polyA.length === 0 || polyB.length === 0) {
+        return { distance: minDist, ptA, ptB };
+    }
+    for (let i = 0; i < polyA.length; i++) {
+        const pA = polyA[i];
+        for (let j = 0; j < polyB.length; j++) {
+            const pB = polyB[j];
+            const dx = pA[0] - pB[0];
+            const dy = pA[1] - pB[1];
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < minDist) {
+                minDist = dist;
+                ptA = pA;
+                ptB = pB;
+            }
+        }
+    }
+    return { distance: minDist, ptA, ptB };
+};
+
+// Walks the MST from the leftmost tooth, always stepping to the leftmost unvisited
+// neighbor next. For an arch-shaped set of points this reproduces the true left-to-right
+// tooth sequence far more reliably than sorting all teeth by X directly (which breaks down
+// wherever the arch curves back on itself, e.g. the posterior teeth).
+const computeMstOrder = (vertices, mstEdges, pca) => {
+    const n = vertices.length;
+    const adj = Array.from({ length: n }, () => []);
+    mstEdges.forEach(edge => {
+        adj[edge.u].push(edge.v);
+        adj[edge.v].push(edge.u);
+    });
+
+    const getRotatedX = (pt) => {
+        if (!pca) return pt.x;
+        const cos = Math.cos(-pca.angle);
+        const sin = Math.sin(-pca.angle);
+        return (pt.x - pca.center.x) * cos - (pt.y - pca.center.y) * sin;
+    };
+
+    let startIdx = 0;
+    let minRotX = Infinity;
+    vertices.forEach((pt, i) => {
+        const rx = getRotatedX(pt);
+        if (rx < minRotX) {
+            minRotX = rx;
+            startIdx = i;
+        }
+    });
+
+    const visited = new Array(n).fill(false);
+    const order = [];
+    const stack = [startIdx];
+    while (stack.length > 0 && order.length < n) {
+        const idx = stack.pop();
+        if (visited[idx]) continue;
+        visited[idx] = true;
+        order.push(idx);
+        const neighbors = adj[idx]
+            .filter(nb => !visited[nb])
+            .sort((a, b) => getRotatedX(vertices[b]) - getRotatedX(vertices[a]));
+        neighbors.forEach(nb => stack.push(nb));
+    }
+    return order;
+};
+
+// The tooth arch's bounding size in the PCA-rotated coordinate system, used to normalize
+// pixel distances into a 0..1 scale that's comparable across images of different sizes/zooms
+const computeArchPcaBounds = (predictions, pca, canvasWidth, canvasHeight) => {
+    let W_pca = canvasWidth;
+    let H_pca = canvasHeight;
+    if (pca) {
+        const cos = Math.cos(-pca.angle);
+        const sin = Math.sin(-pca.angle);
+
+        let minTx = Infinity, maxTx = -Infinity;
+        let minTy = Infinity, maxTy = -Infinity;
+
+        predictions.forEach(pred => {
+            if (!pred.polygon) return;
+            pred.polygon.forEach(pt => {
+                const rx = pt[0] - pca.center.x;
+                const ry = pt[1] - pca.center.y;
+                const tx = rx * cos - ry * sin;
+                const ty = rx * sin + ry * cos;
+                if (tx < minTx) minTx = tx;
+                if (tx > maxTx) maxTx = tx;
+                if (ty < minTy) minTy = ty;
+                if (ty > maxTy) maxTy = ty;
+            });
+        });
+
+        if (maxTx > minTx) W_pca = maxTx - minTx;
+        if (maxTy > minTy) H_pca = maxTy - minTy;
+    }
+    return { W_pca, H_pca };
+};
+
+// The actual segment-to-segment gap between two teeth, normalized against the arch size.
+// Returns null if either polygon is missing.
+const computeGapNormWeight = (predictions, idxA, idxB, W_pca, H_pca, pca) => {
+    const res = getClosestPolygonPoints(predictions[idxA].polygon, predictions[idxB].polygon);
+    if (!res.ptA || !res.ptB) return null;
+
+    let dxRot = res.ptB[0] - res.ptA[0];
+    let dyRot = res.ptB[1] - res.ptA[1];
+
+    if (pca) {
+        const cos = Math.cos(-pca.angle);
+        const sin = Math.sin(-pca.angle);
+
+        const rxU = res.ptA[0] - pca.center.x;
+        const ryU = res.ptA[1] - pca.center.y;
+        const txU = rxU * cos - ryU * sin;
+        const tyU = rxU * sin + ryU * cos;
+
+        const rxV = res.ptB[0] - pca.center.x;
+        const ryV = res.ptB[1] - pca.center.y;
+        const txV = rxV * cos - ryV * sin;
+        const tyV = rxV * sin + ryV * cos;
+
+        dxRot = txV - txU;
+        dyRot = tyV - tyU;
+    }
+
+    const normDx = W_pca > 0 ? dxRot / W_pca : 0;
+    const normDy = H_pca > 0 ? dyRot / H_pca : 0;
+    const normWeight = Math.min(1.0, Math.sqrt(normDx * normDx + normDy * normDy));
+
+    return { normWeight, ptA: res.ptA, ptB: res.ptB };
+};
+
+// Walks the MST order and splits it into groups wherever two consecutive teeth are not
+// touching (normalized gap > TOUCH_NORM_WEIGHT). A missing tooth breaks the chain, so a
+// single image can produce more than one group - the break between groups is the gap left
+// by the missing tooth.
+const computeArchGroups = (predictions, order, W_pca, H_pca, pca) => {
+    if (order.length === 0) return [];
+
+    const groups = [[order[0]]];
+    for (let i = 1; i < order.length; i++) {
+        const gap = computeGapNormWeight(predictions, order[i - 1], order[i], W_pca, H_pca, pca);
+        if (gap && gap.normWeight <= TOUCH_NORM_WEIGHT) {
+            groups[groups.length - 1].push(order[i]);
+        } else {
+            groups.push([order[i]]);
+        }
+    }
+    return groups;
+};
+
 const redrawCanvas = () => {
     if (!currentImage) return;
 
@@ -261,98 +421,20 @@ const redrawCanvas = () => {
             // Compute MST edges
             const mstEdges = computeMST(vertices);
 
-            if (mstEdges.length > 0) {
-                // Calculate PCA bounding dimensions of the entire tooth arch
-                let W_pca = canvas.width;
-                let H_pca = canvas.height;
-                if (pca) {
-                    const cos = Math.cos(-pca.angle);
-                    const sin = Math.sin(-pca.angle);
+            // Draw MST edges (dashed lines) - no distance labels for now
+            mstEdges.forEach(edge => {
+                const uPt = vertices[edge.u];
+                const vPt = vertices[edge.v];
 
-                    let minTx = Infinity, maxTx = -Infinity;
-                    let minTy = Infinity, maxTy = -Infinity;
-
-                    predictions.forEach(pred => {
-                        if (!pred.polygon) return;
-                        pred.polygon.forEach(pt => {
-                            const rx = pt[0] - pca.center.x;
-                            const ry = pt[1] - pca.center.y;
-                            const tx = rx * cos - ry * sin;
-                            const ty = rx * sin + ry * cos;
-                            if (tx < minTx) minTx = tx;
-                            if (tx > maxTx) maxTx = tx;
-                            if (ty < minTy) minTy = ty;
-                            if (ty > maxTy) maxTy = ty;
-                        });
-                    });
-
-                    if (maxTx > minTx) W_pca = maxTx - minTx;
-                    if (maxTy > minTy) H_pca = maxTy - minTy;
-                }
-
-                mstEdges.forEach(edge => {
-                    const uPt = vertices[edge.u];
-                    const vPt = vertices[edge.v];
-
-                    // Project the edge components onto the PCA coordinate system
-                    let dxRot = vPt.x - uPt.x;
-                    let dyRot = vPt.y - uPt.y;
-
-                    if (pca) {
-                        const cos = Math.cos(-pca.angle);
-                        const sin = Math.sin(-pca.angle);
-
-                        const rxU = uPt.x - pca.center.x;
-                        const ryU = uPt.y - pca.center.y;
-                        const txU = rxU * cos - ryU * sin;
-                        const tyU = rxU * sin + ryU * cos;
-
-                        const rxV = vPt.x - pca.center.x;
-                        const ryV = vPt.y - pca.center.y;
-                        const txV = rxV * cos - ryV * sin;
-                        const tyV = rxV * sin + ryV * cos;
-
-                        dxRot = txV - txU;
-                        dyRot = tyV - tyU;
-                    }
-
-                    const normDx = W_pca > 0 ? dxRot / W_pca : 0;
-                    const normDy = H_pca > 0 ? dyRot / H_pca : 0;
-                    const normWeight = Math.min(1.0, Math.sqrt(normDx * normDx + normDy * normDy));
-
-                    // Draw MST edge (dashed line)
-                    ctx.beginPath();
-                    ctx.moveTo(uPt.x, uPt.y);
-                    ctx.lineTo(vPt.x, vPt.y);
-                    ctx.strokeStyle = '#00ff66'; // Vibrant green
-                    ctx.lineWidth = 2.5;
-                    ctx.setLineDash([5, 5]);
-                    ctx.stroke();
-                    ctx.setLineDash([]); // Reset
-
-                    // Draw normalized distance text at the middle of the edge
-                    const midX = (uPt.x + vPt.x) / 2;
-                    const midY = (uPt.y + vPt.y) / 2;
-                    const valText = normWeight.toFixed(2);
-
-                    // Text background box for legibility
-                    ctx.font = 'bold 12px sans-serif';
-                    const textWidth = ctx.measureText(valText).width;
-                    const padX = 4;
-                    const padY = 2;
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-                    ctx.fillRect(midX - textWidth / 2 - padX, midY - 6 - padY, textWidth + padX * 2, 12 + padY * 2);
-                    ctx.strokeStyle = '#00ff66';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(midX - textWidth / 2 - padX, midY - 6 - padY, textWidth + padX * 2, 12 + padY * 2);
-
-                    // Text drawing
-                    ctx.fillStyle = '#ffffff';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(valText, midX, midY);
-                });
-            }
+                ctx.beginPath();
+                ctx.moveTo(uPt.x, uPt.y);
+                ctx.lineTo(vPt.x, vPt.y);
+                ctx.strokeStyle = '#00ff66'; // Vibrant green
+                ctx.lineWidth = 2.5;
+                ctx.setLineDash([5, 5]);
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset
+            });
 
             // Draw vertices (centroids)
             vertices.forEach(pt => {
@@ -365,87 +447,179 @@ const redrawCanvas = () => {
                 ctx.stroke();
             });
 
-            // Label teeth with FDI numbers following MST traversal order (only when exactly 12 teeth)
-            if (predictions.length === 12 && hasClassification) {
-                const fdiLabels = isLower
-                    ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
-                    : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
-
-                const getRotatedX = (pt) => {
-                    if (!pca) return pt.x;
-                    const cos = Math.cos(-pca.angle);
-                    const sin = Math.sin(-pca.angle);
-                    return (pt.x - pca.center.x) * cos - (pt.y - pca.center.y) * sin;
-                };
-
-                // Build adjacency list from MST edges
-                const adj = Array.from({ length: 12 }, () => []);
-                mstEdges.forEach(edge => {
-                    adj[edge.u].push(edge.v);
-                    adj[edge.v].push(edge.u);
-                });
-
-                // Start traversal from the leftmost centroid along the arch
-                let startIdx = 0;
-                let minRotX = Infinity;
-                vertices.forEach((pt, i) => {
-                    const rx = getRotatedX(pt);
-                    if (rx < minRotX) {
-                        minRotX = rx;
-                        startIdx = i;
-                    }
-                });
-
-                // DFS the tree, always visiting the leftmost unvisited neighbor next
-                const visited = new Array(12).fill(false);
-                const order = [];
-                const stack = [startIdx];
-                while (stack.length > 0 && order.length < 12) {
-                    const idx = stack.pop();
-                    if (visited[idx]) continue;
-                    visited[idx] = true;
-                    order.push(idx);
-                    const neighbors = adj[idx]
-                        .filter(n => !visited[n])
-                        .sort((a, b) => getRotatedX(vertices[b]) - getRotatedX(vertices[a]));
-                    neighbors.forEach(n => stack.push(n));
-                }
-
-                if (order.length === 12) {
-                    order.forEach((vertexIdx, orderIdx) => {
-                        const pred = predictions[vertexIdx];
-                        const centerX = (pred.box[0] + pred.box[2]) / 2;
-                        const centerY = (pred.box[1] + pred.box[3]) / 2;
-
-                        const boxWidth = 76;
-                        const boxHeight = 50;
-                        const rx = centerX - boxWidth / 2;
-                        const ry = centerY - boxHeight / 2;
-
-                        ctx.beginPath();
-                        if (typeof ctx.roundRect === 'function') {
-                            ctx.roundRect(rx, ry, boxWidth, boxHeight, 8);
-                        } else {
-                            ctx.rect(rx, ry, boxWidth, boxHeight);
-                        }
-                        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-                        ctx.fill();
-                        ctx.strokeStyle = '#ffffff';
-                        ctx.lineWidth = 1.8;
-                        ctx.stroke();
-
-                        ctx.font = 'bold 30px sans-serif';
-                        ctx.fillStyle = '#00ffff';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText(String(fdiLabels[orderIdx]), centerX, centerY + 1);
-                    });
-                }
-            }
         }
     } else {
         const mstStatus = document.getElementById('mst-status');
         if (mstStatus && !mstCb.disabled) mstStatus.textContent = '';
+    }
+
+    // Draw Segment Gap if checked - labels the distance for teeth that are NOT touching
+    if (gapCb.checked && !gapCb.disabled && predictions) {
+        const gapStatus = document.getElementById('gap-status');
+        if (predictions.length < 2) {
+            if (gapStatus) {
+                gapStatus.textContent = ' Requires 2+';
+                gapStatus.style.color = '#f44336';
+            }
+        } else {
+            if (gapStatus) {
+                gapStatus.textContent = ' Active';
+                gapStatus.style.color = '#4caf50';
+            }
+
+            // Walk the tooth arch in MST order and compare each tooth's segment only to the
+            // next one in that order - this follows the arch's actual curve (unlike a plain
+            // X-sort, which breaks down where the arch bends back at the posterior teeth)
+            const vertices = predictions.map(pred => computeCentroid(pred.polygon));
+            const mstEdges = computeMST(vertices);
+            const order = computeMstOrder(vertices, mstEdges, pca);
+            const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
+
+            for (let i = 0; i < order.length - 1; i++) {
+                const gap = computeGapNormWeight(predictions, order[i], order[i + 1], W_pca, H_pca, pca);
+                if (!gap) continue;
+                if (gap.normWeight <= TOUCH_NORM_WEIGHT) continue; // touching - not a gap
+
+                const { ptA, ptB, normWeight } = gap;
+
+                // Draw gap edge (dashed line) between the two closest polygon points
+                ctx.beginPath();
+                ctx.moveTo(ptA[0], ptA[1]);
+                ctx.lineTo(ptB[0], ptB[1]);
+                ctx.strokeStyle = '#ff3366'; // Neon pink - distinguishes gaps from MST's green
+                ctx.lineWidth = 2.5;
+                ctx.setLineDash([5, 5]);
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset
+
+                // Draw a two-line label at the middle of the edge: distance value, then "LOSS" below it
+                const midX = (ptA[0] + ptB[0]) / 2;
+                const midY = (ptA[1] + ptB[1]) / 2;
+                const valText = normWeight.toFixed(2);
+                const lossText = 'LOSS';
+
+                ctx.font = 'bold 28px sans-serif';
+                const valWidth = ctx.measureText(valText).width;
+                const valHeight = 28;
+
+                ctx.font = 'bold 20px sans-serif';
+                const lossWidth = ctx.measureText(lossText).width;
+                const lossHeight = 20;
+
+                const padding = 12;
+                const lineGap = 4;
+                const boxWidth = Math.max(valWidth, lossWidth) + padding * 2;
+                const boxHeight = padding * 2 + valHeight + lineGap + lossHeight;
+                const boxX = midX - boxWidth / 2;
+                const boxY = midY - boxHeight / 2;
+                const valY = boxY + padding;
+                const lossY = valY + valHeight + lineGap;
+
+                // Text background box for legibility
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 6);
+                } else {
+                    ctx.rect(boxX, boxY, boxWidth, boxHeight);
+                }
+                ctx.fill();
+                ctx.strokeStyle = '#ff3366';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Distance value (top line)
+                ctx.font = 'bold 28px sans-serif';
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(valText, midX, valY);
+
+                // "LOSS" label (bottom line)
+                ctx.font = 'bold 20px sans-serif';
+                ctx.fillStyle = '#ff3366';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(lossText, midX, lossY);
+            }
+        }
+    } else {
+        const gapStatus = document.getElementById('gap-status');
+        if (gapStatus && !gapCb.disabled) gapStatus.textContent = '';
+    }
+
+    // Draw FDI numbers if checked - labels teeth in MST arch order regardless of tooth count
+    if (fdiCb.checked && !fdiCb.disabled && predictions) {
+        const fdiStatus = document.getElementById('fdi-status');
+
+        if (!hasClassification) {
+            if (fdiStatus) {
+                fdiStatus.textContent = ' Requires Jaw Classification';
+                fdiStatus.style.color = '#f44336';
+            }
+        } else {
+            if (fdiStatus) {
+                fdiStatus.textContent = ' Active';
+                fdiStatus.style.color = '#4caf50';
+            }
+
+            const vertices = predictions.map(pred => computeCentroid(pred.polygon));
+            const mstEdges = computeMST(vertices);
+            const order = computeMstOrder(vertices, mstEdges, pca);
+            const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
+
+            // Teeth that are touching share one group; a break between groups is a missing
+            // tooth, so skip one FDI slot there before labeling the next group
+            const groups = computeArchGroups(predictions, order, W_pca, H_pca, pca);
+
+            const fdiLabels = isLower
+                ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
+                : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
+
+            let slot = 0;
+            groups.forEach((group, groupIdx) => {
+                if (groupIdx > 0) slot += 1; // skip the FDI slot left by the missing tooth
+
+                group.forEach(vertexIdx => {
+                    if (slot >= fdiLabels.length) {
+                        slot += 1;
+                        return;
+                    }
+
+                    const pred = predictions[vertexIdx];
+                    const centerX = (pred.box[0] + pred.box[2]) / 2;
+                    const centerY = (pred.box[1] + pred.box[3]) / 2;
+
+                    const boxWidth = 76;
+                    const boxHeight = 50;
+                    const rx = centerX - boxWidth / 2;
+                    const ry = centerY - boxHeight / 2;
+
+                    ctx.beginPath();
+                    if (typeof ctx.roundRect === 'function') {
+                        ctx.roundRect(rx, ry, boxWidth, boxHeight, 8);
+                    } else {
+                        ctx.rect(rx, ry, boxWidth, boxHeight);
+                    }
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 1.8;
+                    ctx.stroke();
+
+                    ctx.font = 'bold 30px sans-serif';
+                    ctx.fillStyle = '#00ffff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(String(fdiLabels[slot]), centerX, centerY + 1);
+
+                    slot += 1;
+                });
+            });
+        }
+    } else {
+        const fdiStatus = document.getElementById('fdi-status');
+        if (fdiStatus && !fdiCb.disabled) fdiStatus.textContent = '';
     }
 
     ctx.restore();
@@ -705,6 +879,22 @@ const updateCheckboxStates = () => {
         const mstStatus = document.getElementById('mst-status');
         if (mstStatus) mstStatus.textContent = '';
     }
+
+    // Segment Gap is enabled when Tooth Segmentation is checked
+    gapCb.disabled = !yoloCb.checked;
+    if (gapCb.disabled) {
+        gapCb.checked = false;
+        const gapStatus = document.getElementById('gap-status');
+        if (gapStatus) gapStatus.textContent = '';
+    }
+
+    // FDI is enabled when Tooth Segmentation is checked
+    fdiCb.disabled = !yoloCb.checked;
+    if (fdiCb.disabled) {
+        fdiCb.checked = false;
+        const fdiStatus = document.getElementById('fdi-status');
+        if (fdiStatus) fdiStatus.textContent = '';
+    }
 };
 
 jawCb.addEventListener('change', () => {
@@ -735,6 +925,16 @@ pcaCb.addEventListener('change', () => {
 });
 
 mstCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
+});
+
+gapCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
+});
+
+fdiCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });
