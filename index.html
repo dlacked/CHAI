@@ -37,6 +37,8 @@
             <div class="sidebar-section">
                 <label for="oral-image-input" class="sidebar-upload-btn">Open Oral Folder</label>
                 <input type="file" id="oral-image-input" webkitdirectory directory multiple accept="image/*">
+                <label for="oral-image-files" class="sidebar-upload-btn" style="margin-top: 10px;">Open Oral Images</label>
+                <input type="file" id="oral-image-files" multiple accept="image/*" style="display:none;">
                 <div id="oral-image-status" class="sidebar-status">No directory selected</div>
             </div>
             <div class="sidebar-section">
@@ -59,11 +61,7 @@
                     <section>
                         <input type="checkbox" id="mst-checkbox">
                         <label for="mst-checkbox">MST</label>
-                    </section>
-                    <section>
-                        <input type="checkbox" id="fdi-checkbox">
-                        <label for="fdi-checkbox">FDI</label>
-                        <span id="fdi-status" class="sidebar-status-inline"></span>
+                        <span id="mst-status" class="sidebar-status-inline"></span>
                     </section>
                 </div>
             </div>

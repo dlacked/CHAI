@@ -7,7 +7,6 @@ const jawCb = document.getElementById('jaw-classification-checkbox');
 const yoloCb = document.getElementById('yolov8-seg-checkbox');
 const pcaCb = document.getElementById('pca-checkbox');
 const mstCb = document.getElementById('mst-checkbox');
-const fdiCb = document.getElementById('fdi-checkbox');
 
 
 let imageFiles = [];
@@ -106,6 +105,70 @@ const calculatePCARotation = (predictions, canvasWidth, isUpper) => {
     };
 };
 
+const computeCentroid = (polygon) => {
+    if (!polygon || polygon.length === 0) return { x: 0, y: 0 };
+    let sumX = 0;
+    let sumY = 0;
+    polygon.forEach(pt => {
+        sumX += pt[0];
+        sumY += pt[1];
+    });
+    return { x: sumX / polygon.length, y: sumY / polygon.length };
+};
+
+const computeMST = (vertices) => {
+    const n = vertices.length;
+    if (n === 0) return [];
+
+    const inMST = new Array(n).fill(false);
+    const minEdge = new Array(n).fill(Infinity);
+    const parent = new Array(n).fill(-1);
+
+    minEdge[0] = 0;
+    const edges = [];
+
+    for (let count = 0; count < n; count++) {
+        let u = -1;
+        let minVal = Infinity;
+        for (let i = 0; i < n; i++) {
+            if (!inMST[i] && minEdge[i] < minVal) {
+                minVal = minEdge[i];
+                u = i;
+            }
+        }
+
+        if (u === -1) break;
+
+        inMST[u] = true;
+
+        if (parent[u] !== -1) {
+            const p = parent[u];
+            const dx = vertices[u].x - vertices[p].x;
+            const dy = vertices[u].y - vertices[p].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            edges.push({
+                u,
+                v: p,
+                weight: dist
+            });
+        }
+
+        for (let v = 0; v < n; v++) {
+            if (!inMST[v]) {
+                const dx = vertices[u].x - vertices[v].x;
+                const dy = vertices[u].y - vertices[v].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < minEdge[v]) {
+                    minEdge[v] = dist;
+                    parent[v] = u;
+                }
+            }
+        }
+    }
+
+    return edges;
+};
+
 const redrawCanvas = () => {
     if (!currentImage) return;
 
@@ -118,12 +181,12 @@ const redrawCanvas = () => {
     const predictions = file ? segmentationCache[file.name] : null;
 
     let pca = null;
-    if (pcaCb.checked && !pcaCb.disabled && hasClassification && predictions) {
+    if (hasClassification && predictions) {
         pca = calculatePCARotation(predictions, canvas.width, isUpper);
     }
 
     ctx.save();
-    if (pca) {
+    if (pca && pcaCb.checked && !pcaCb.disabled) {
         // Rotate around the PCA center
         ctx.translate(pca.center.x, pca.center.y);
         ctx.rotate(-pca.angle);
@@ -139,7 +202,7 @@ const redrawCanvas = () => {
     }
 
     // Draw PCA overlay if PCA is active
-    if (pca) {
+    if (pca && pcaCb.checked && !pcaCb.disabled) {
         // Draw the connection line (horizontal reference in rotated context)
         ctx.beginPath();
         ctx.moveTo(pca.pLeft.x, pca.pLeft.y);
@@ -178,77 +241,211 @@ const redrawCanvas = () => {
         ctx.stroke();
     }
 
-    // Draw FDI if checked
-    if (fdiCb.checked && !fdiCb.disabled && predictions) {
-        const fdiStatus = document.getElementById('fdi-status');
-        if (predictions.length !== 12) {
-            if (fdiStatus) {
-                fdiStatus.textContent = ' Requires 12';
-                fdiStatus.style.color = '#f44336';
+    // Draw MST if checked
+    if (mstCb.checked && !mstCb.disabled && predictions) {
+        const mstStatus = document.getElementById('mst-status');
+        if (predictions.length < 2) {
+            if (mstStatus) {
+                mstStatus.textContent = ' Requires 2+';
+                mstStatus.style.color = '#f44336';
             }
         } else {
-            if (fdiStatus) {
-                fdiStatus.textContent = ' Active';
-                fdiStatus.style.color = '#4caf50';
+            if (mstStatus) {
+                mstStatus.textContent = ' Active';
+                mstStatus.style.color = '#4caf50';
             }
 
-            // Sort predictions left-to-right (horizontal center)
-            const sortedPreds = [...predictions].sort((a, b) => {
-                const centerX_A = (a.box[0] + a.box[2]) / 2;
-                const centerX_B = (b.box[0] + b.box[2]) / 2;
-                return centerX_A - centerX_B;
+            // Compute centroids
+            const vertices = predictions.map(pred => computeCentroid(pred.polygon));
+
+            // Compute MST edges
+            const mstEdges = computeMST(vertices);
+
+            if (mstEdges.length > 0) {
+                // Calculate PCA bounding dimensions of the entire tooth arch
+                let W_pca = canvas.width;
+                let H_pca = canvas.height;
+                if (pca) {
+                    const cos = Math.cos(-pca.angle);
+                    const sin = Math.sin(-pca.angle);
+
+                    let minTx = Infinity, maxTx = -Infinity;
+                    let minTy = Infinity, maxTy = -Infinity;
+
+                    predictions.forEach(pred => {
+                        if (!pred.polygon) return;
+                        pred.polygon.forEach(pt => {
+                            const rx = pt[0] - pca.center.x;
+                            const ry = pt[1] - pca.center.y;
+                            const tx = rx * cos - ry * sin;
+                            const ty = rx * sin + ry * cos;
+                            if (tx < minTx) minTx = tx;
+                            if (tx > maxTx) maxTx = tx;
+                            if (ty < minTy) minTy = ty;
+                            if (ty > maxTy) maxTy = ty;
+                        });
+                    });
+
+                    if (maxTx > minTx) W_pca = maxTx - minTx;
+                    if (maxTy > minTy) H_pca = maxTy - minTy;
+                }
+
+                mstEdges.forEach(edge => {
+                    const uPt = vertices[edge.u];
+                    const vPt = vertices[edge.v];
+
+                    // Project the edge components onto the PCA coordinate system
+                    let dxRot = vPt.x - uPt.x;
+                    let dyRot = vPt.y - uPt.y;
+
+                    if (pca) {
+                        const cos = Math.cos(-pca.angle);
+                        const sin = Math.sin(-pca.angle);
+
+                        const rxU = uPt.x - pca.center.x;
+                        const ryU = uPt.y - pca.center.y;
+                        const txU = rxU * cos - ryU * sin;
+                        const tyU = rxU * sin + ryU * cos;
+
+                        const rxV = vPt.x - pca.center.x;
+                        const ryV = vPt.y - pca.center.y;
+                        const txV = rxV * cos - ryV * sin;
+                        const tyV = rxV * sin + ryV * cos;
+
+                        dxRot = txV - txU;
+                        dyRot = tyV - tyU;
+                    }
+
+                    const normDx = W_pca > 0 ? dxRot / W_pca : 0;
+                    const normDy = H_pca > 0 ? dyRot / H_pca : 0;
+                    const normWeight = Math.min(1.0, Math.sqrt(normDx * normDx + normDy * normDy));
+
+                    // Draw MST edge (dashed line)
+                    ctx.beginPath();
+                    ctx.moveTo(uPt.x, uPt.y);
+                    ctx.lineTo(vPt.x, vPt.y);
+                    ctx.strokeStyle = '#00ff66'; // Vibrant green
+                    ctx.lineWidth = 2.5;
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    ctx.setLineDash([]); // Reset
+
+                    // Draw normalized distance text at the middle of the edge
+                    const midX = (uPt.x + vPt.x) / 2;
+                    const midY = (uPt.y + vPt.y) / 2;
+                    const valText = normWeight.toFixed(2);
+
+                    // Text background box for legibility
+                    ctx.font = 'bold 12px sans-serif';
+                    const textWidth = ctx.measureText(valText).width;
+                    const padX = 4;
+                    const padY = 2;
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                    ctx.fillRect(midX - textWidth / 2 - padX, midY - 6 - padY, textWidth + padX * 2, 12 + padY * 2);
+                    ctx.strokeStyle = '#00ff66';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(midX - textWidth / 2 - padX, midY - 6 - padY, textWidth + padX * 2, 12 + padY * 2);
+
+                    // Text drawing
+                    ctx.fillStyle = '#ffffff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(valText, midX, midY);
+                });
+            }
+
+            // Draw vertices (centroids)
+            vertices.forEach(pt => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
+                ctx.fillStyle = '#00ff66';
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
             });
 
-            // Get the mapped array based on classification
-            let fdiLabels = [];
-            if (isLower) {
-                fdiLabels = [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36];
-            } else if (isUpper) {
-                fdiLabels = [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
-            }
+            // Label teeth with FDI numbers following MST traversal order (only when exactly 12 teeth)
+            if (predictions.length === 12 && hasClassification) {
+                const fdiLabels = isLower
+                    ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
+                    : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
 
-            if (fdiLabels.length === 12) {
-                sortedPreds.forEach((pred, idx) => {
-                    const centerX = (pred.box[0] + pred.box[2]) / 2;
-                    const centerY = (pred.box[1] + pred.box[3]) / 2;
+                const getRotatedX = (pt) => {
+                    if (!pca) return pt.x;
+                    const cos = Math.cos(-pca.angle);
+                    const sin = Math.sin(-pca.angle);
+                    return (pt.x - pca.center.x) * cos - (pt.y - pca.center.y) * sin;
+                };
 
-                    const boxWidth = 55;
-                    const boxHeight = 36;
-                    const rx = centerX - boxWidth / 2;
-                    const ry = centerY - boxHeight / 2;
-
-                    // Draw background rounded rectangle
-                    ctx.beginPath();
-                    if (typeof ctx.roundRect === 'function') {
-                        ctx.roundRect(rx, ry, boxWidth, boxHeight, 6);
-                    } else {
-                        ctx.rect(rx, ry, boxWidth, boxHeight);
-                    }
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-                    ctx.fill();
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.lineWidth = 1.5;
-                    ctx.stroke();
-
-                    // Draw index text (Top line: #0 ~ #11)
-                    ctx.font = 'bold 11px sans-serif';
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'top';
-                    ctx.fillText(`#${idx}`, centerX, ry + 4);
-
-                    // Draw FDI text (Bottom line: FDI number)
-                    ctx.font = 'bold 16px sans-serif';
-                    ctx.fillStyle = '#00ffff';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillText(String(fdiLabels[idx]), centerX, ry + boxHeight - 3);
+                // Build adjacency list from MST edges
+                const adj = Array.from({ length: 12 }, () => []);
+                mstEdges.forEach(edge => {
+                    adj[edge.u].push(edge.v);
+                    adj[edge.v].push(edge.u);
                 });
+
+                // Start traversal from the leftmost centroid along the arch
+                let startIdx = 0;
+                let minRotX = Infinity;
+                vertices.forEach((pt, i) => {
+                    const rx = getRotatedX(pt);
+                    if (rx < minRotX) {
+                        minRotX = rx;
+                        startIdx = i;
+                    }
+                });
+
+                // DFS the tree, always visiting the leftmost unvisited neighbor next
+                const visited = new Array(12).fill(false);
+                const order = [];
+                const stack = [startIdx];
+                while (stack.length > 0 && order.length < 12) {
+                    const idx = stack.pop();
+                    if (visited[idx]) continue;
+                    visited[idx] = true;
+                    order.push(idx);
+                    const neighbors = adj[idx]
+                        .filter(n => !visited[n])
+                        .sort((a, b) => getRotatedX(vertices[b]) - getRotatedX(vertices[a]));
+                    neighbors.forEach(n => stack.push(n));
+                }
+
+                if (order.length === 12) {
+                    order.forEach((vertexIdx, orderIdx) => {
+                        const pred = predictions[vertexIdx];
+                        const centerX = (pred.box[0] + pred.box[2]) / 2;
+                        const centerY = (pred.box[1] + pred.box[3]) / 2;
+
+                        const boxWidth = 76;
+                        const boxHeight = 50;
+                        const rx = centerX - boxWidth / 2;
+                        const ry = centerY - boxHeight / 2;
+
+                        ctx.beginPath();
+                        if (typeof ctx.roundRect === 'function') {
+                            ctx.roundRect(rx, ry, boxWidth, boxHeight, 8);
+                        } else {
+                            ctx.rect(rx, ry, boxWidth, boxHeight);
+                        }
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                        ctx.fill();
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 1.8;
+                        ctx.stroke();
+
+                        ctx.font = 'bold 30px sans-serif';
+                        ctx.fillStyle = '#00ffff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(String(fdiLabels[orderIdx]), centerX, centerY + 1);
+                    });
+                }
             }
         }
     } else {
-        const fdiStatus = document.getElementById('fdi-status');
-        if (fdiStatus && !fdiCb.disabled) fdiStatus.textContent = '';
+        const mstStatus = document.getElementById('mst-status');
+        if (mstStatus && !mstCb.disabled) mstStatus.textContent = '';
     }
 
     ctx.restore();
@@ -501,14 +698,12 @@ const updateCheckboxStates = () => {
     pcaCb.disabled = !yoloCb.checked;
     if (pcaCb.disabled) pcaCb.checked = false;
 
-    mstCb.disabled = !pcaCb.checked;
-    if (mstCb.disabled) mstCb.checked = false;
-
-    fdiCb.disabled = !mstCb.checked;
-    if (fdiCb.disabled) {
-        fdiCb.checked = false;
-        const fdiStatus = document.getElementById('fdi-status');
-        if (fdiStatus) fdiStatus.textContent = '';
+    // MST is enabled when Tooth Segmentation is checked
+    mstCb.disabled = !yoloCb.checked;
+    if (mstCb.disabled) {
+        mstCb.checked = false;
+        const mstStatus = document.getElementById('mst-status');
+        if (mstStatus) mstStatus.textContent = '';
     }
 };
 
@@ -540,11 +735,6 @@ pcaCb.addEventListener('change', () => {
 });
 
 mstCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-fdiCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });
