@@ -333,6 +333,50 @@ const computeArchSlots = (predictions, order, W_pca, H_pca, pca) => {
     return slots;
 };
 
+// Draws a black badge with a '#' + FDI number (white '#', cyan number) centered at the given point
+const drawFdiNumberBadge = (centerX, centerY, numText) => {
+    const boxWidth = 76;
+    const boxHeight = 50;
+    const rx = centerX - boxWidth / 2;
+    const ry = centerY - boxHeight / 2;
+
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(rx, ry, boxWidth, boxHeight, 8);
+    } else {
+        ctx.rect(rx, ry, boxWidth, boxHeight);
+    }
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    const hashText = '#';
+
+    ctx.font = 'bold 30px sans-serif';
+    const numWidth = ctx.measureText(numText).width;
+    ctx.font = 'bold 16px sans-serif';
+    const hashWidth = ctx.measureText(hashText).width;
+
+    const spacing = 2;
+    const totalWidth = hashWidth + spacing + numWidth;
+    const startX = centerX - totalWidth / 2;
+
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    // Draw '#' in small font (white)
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(hashText, startX, centerY + 1);
+
+    // Draw the number in large font (cyan)
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText(numText, startX + hashWidth + spacing, centerY + 1);
+};
+
 const redrawCanvas = () => {
     if (!currentImage) return;
 
@@ -457,6 +501,8 @@ const redrawCanvas = () => {
         if (archPathStatus && !archPathCb.disabled) archPathStatus.textContent = '';
     }
 
+    // coords/theta/seq rendering removed from here, integrated into FDI drawing block below
+
     // Draw Segment Gap if checked - labels the distance for teeth that are NOT touching
     if (gapCb.checked && !gapCb.disabled && predictions) {
         const gapStatus = document.getElementById('gap-status');
@@ -467,8 +513,8 @@ const redrawCanvas = () => {
             }
         } else if (predictions.length >= 12) {
             if (gapStatus) {
-                gapStatus.textContent = ' None (12+ Teeth)';
-                gapStatus.style.color = '#4caf50';
+                gapStatus.textContent = ' Deactivated';
+                gapStatus.style.color = '#f44336';
             }
         } else {
             if (gapStatus) {
@@ -582,7 +628,7 @@ const redrawCanvas = () => {
     }
 
     // Draw FDI numbers if checked - labels teeth in nearest-neighbor arch order regardless of tooth count
-    if (fdiCb.checked && !fdiCb.disabled && predictions) {
+    if (fdiCb.checked && !fdiCb.disabled && predictions && pca) {
         const fdiStatus = document.getElementById('fdi-status');
 
         if (!hasClassification) {
@@ -591,34 +637,21 @@ const redrawCanvas = () => {
                 fdiStatus.style.color = '#f44336';
             }
         } else {
+            if (fdiStatus) {
+                fdiStatus.textContent = ' Active';
+                fdiStatus.style.color = '#4caf50';
+            }
+
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
             const order = computeArchOrder(vertices, pca, isUpper);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
+            const slots = computeArchSlots(predictions, order, W_pca, H_pca, pca);
 
-            // Teeth that are touching share one group; a break between groups is a missing
-            // tooth, so skip one FDI slot there before labeling the next group
-            const groups = computeArchGroups(predictions, order, W_pca, H_pca, pca);
+            const fdiLabels = isLower
+                ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
+                : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
 
-            // Fewer than 12 teeth with no detected gap means we can't tell where the missing
-            // tooth actually is (it could be at either end of the arch) - skip labeling rather
-            // than guess
-            if (predictions.length < 12 && groups.length === 1) {
-                if (fdiStatus) {
-                    fdiStatus.textContent = ' Gap Undetected';
-                    fdiStatus.style.color = '#f44336';
-                }
-            } else {
-                if (fdiStatus) {
-                    fdiStatus.textContent = ' Active';
-                    fdiStatus.style.color = '#4caf50';
-                }
-
-                const fdiLabels = isLower
-                    ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
-                    : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
-
-                const slots = computeArchSlots(predictions, order, W_pca, H_pca, pca);
-
+            const drawFdiLabels = () => {
                 order.forEach(vertexIdx => {
                     const slot = slots[vertexIdx];
                     if (slot < 0 || slot >= fdiLabels.length) return;
@@ -626,30 +659,143 @@ const redrawCanvas = () => {
                     const pred = predictions[vertexIdx];
                     const centerX = (pred.box[0] + pred.box[2]) / 2;
                     const centerY = (pred.box[1] + pred.box[3]) / 2;
-
-                    const boxWidth = 76;
-                    const boxHeight = 50;
-                    const rx = centerX - boxWidth / 2;
-                    const ry = centerY - boxHeight / 2;
-
-                    ctx.beginPath();
-                    if (typeof ctx.roundRect === 'function') {
-                        ctx.roundRect(rx, ry, boxWidth, boxHeight, 8);
-                    } else {
-                        ctx.rect(rx, ry, boxWidth, boxHeight);
-                    }
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-                    ctx.fill();
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.lineWidth = 1.8;
-                    ctx.stroke();
-
-                    ctx.font = 'bold 30px sans-serif';
-                    ctx.fillStyle = '#00ffff';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(String(fdiLabels[slot]), centerX, centerY + 1);
+                    drawFdiNumberBadge(centerX, centerY, String(fdiLabels[slot]));
                 });
+            };
+
+            if (predictions.length === 12) {
+                drawFdiLabels();
+            } else {
+                // Fewer than 12 teeth detected. Group the arch order into touching-chains
+                // separated by gaps (each gap = exactly one missing tooth by assumption). If
+                // detected teeth + gaps reconstructs to exactly 12, the slot assignment is
+                // trustworthy - label normally. Otherwise fall back to the raw debug view.
+                const groups = computeArchGroups(predictions, order, W_pca, H_pca, pca);
+                const reconstructedTotal = predictions.length + (groups.length - 1);
+
+                if (reconstructedTotal === 12) {
+                    drawFdiLabels();
+                } else {
+                    // 11 or fewer teeth (and the gap count doesn't reconstruct to 12): draw
+                    // coordinates, theta, and greedy sequence numbers instead
+                    predictions.forEach((pred, vertexIdx) => {
+                        const poly = pred.polygon;
+                        if (!poly || poly.length === 0) return;
+    
+                        // 1. Calculate bounding box of polygon (raw screen coordinates)
+                        const xs = poly.map(pt => pt[0]);
+                        const ys = poly.map(pt => pt[1]);
+                        const x_min = Math.min(...xs);
+                        const x_max = Math.max(...xs);
+                        const y_min = Math.min(...ys);
+                        const y_max = Math.max(...ys);
+    
+                        // 2. Draw bounding box
+                        ctx.beginPath();
+                        ctx.rect(x_min, y_min, x_max - x_min, y_max - y_min);
+                        ctx.strokeStyle = '#f39c12'; // Orange-yellow bounding box
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+    
+                        // 3. Compute normalized features
+                        const centroid = computeCentroid(poly);
+                        const rx = centroid.x - pca.center.x;
+                        const ry = centroid.y - pca.center.y;
+                        const cos = Math.cos(-pca.angle);
+                        const sin = Math.sin(-pca.angle);
+                        const tx = rx * cos - ry * sin;
+                        const ty = rx * sin + ry * cos;
+                        const angle_rad = Math.atan2(ty, tx);
+                        const angle_norm = angle_rad / Math.PI;
+    
+                        const slot = slots ? slots[vertexIdx] : -1;
+                        const fdi_number = (slot >= 0 && slot < fdiLabels.length) ? fdiLabels[slot] : -1;
+    
+                        // Center, mirror (x flip), and normalize coordinates
+                        let x1_c = x_min - pca.center.x;
+                        let y1_c = y_min - pca.center.y;
+                        let x2_c = x_max - pca.center.x;
+                        let y2_c = y_max - pca.center.y;
+    
+                        if (fdi_number !== -1) {
+                            const tens = Math.floor(fdi_number / 10);
+                            if (tens === 2 || tens === 3) {
+                                const x1_new = -x1_c;
+                                const x2_new = -x2_c;
+                                x1_c = Math.min(x1_new, x2_new);
+                                x2_c = Math.max(x1_new, x2_new);
+                            }
+                        }
+    
+                        const x1_norm = x1_c / canvas.width;
+                        const y1_norm = y1_c / canvas.height;
+                        const x2_norm = x2_c / canvas.width;
+                        const y2_norm = y2_c / canvas.height;
+    
+                        // Mirror theta
+                        let theta_val = angle_norm;
+                        if (fdi_number !== -1) {
+                            const tens = Math.floor(fdi_number / 10);
+                            if (tens === 2 || tens === 3) {
+                                if (theta_val >= 0) theta_val = 1.0 - theta_val;
+                                else theta_val = -1.0 - theta_val;
+                            }
+                        }
+    
+                        const mst_seq = order.indexOf(vertexIdx);
+    
+                        // 4. Build text lines
+                        const lines = [];
+                        lines.push(`Seq: ${mst_seq}`);
+                        lines.push(`x1:${x1_norm.toFixed(4)} y1:${y1_norm.toFixed(4)}`);
+                        lines.push(`x2:${x2_norm.toFixed(4)} y2:${y2_norm.toFixed(4)}`);
+                        lines.push(`θ:${theta_val.toFixed(6)}`);
+    
+                        // 5. Render label box at centroid
+                        ctx.font = 'bold 20px monospace';
+                        const lineHeight = 24;
+                        const boxPadding = 12;
+    
+                        let maxTextWidth = 0;
+                        lines.forEach(line => {
+                            const w = ctx.measureText(line).width;
+                            if (w > maxTextWidth) maxTextWidth = w;
+                        });
+    
+                        const labelBoxWidth = maxTextWidth + boxPadding * 2;
+                        const labelBoxHeight = lines.length * lineHeight + boxPadding * 2;
+    
+                        const labelBoxX = centroid.x - labelBoxWidth / 2;
+                        const labelBoxY = centroid.y - labelBoxHeight / 2;
+    
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                        ctx.beginPath();
+                        if (typeof ctx.roundRect === 'function') {
+                            ctx.roundRect(labelBoxX, labelBoxY, labelBoxWidth, labelBoxHeight, 4);
+                        } else {
+                            ctx.rect(labelBoxX, labelBoxY, labelBoxWidth, labelBoxHeight);
+                        }
+                        ctx.fill();
+                        ctx.strokeStyle = '#f39c12';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+    
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'top';
+    
+                        lines.forEach((line, i) => {
+                            const lineY = labelBoxY + boxPadding + i * lineHeight;
+                            if (line.startsWith('Seq:')) {
+                                ctx.fillStyle = '#00ff66';
+                            } else if (line.startsWith('θ')) {
+                                ctx.fillStyle = '#ff80df';
+                            } else {
+                                ctx.fillStyle = '#ffffff';
+                            }
+                            ctx.fillText(line, labelBoxX + boxPadding, lineY);
+                        });
+                    });
+                }
             }
         }
     } else {
@@ -915,20 +1061,44 @@ const updateCheckboxStates = () => {
         if (archPathStatus) archPathStatus.textContent = '';
     }
 
-    // Segment Gap is enabled when Arch Path is checked
+    const file = imageFiles[currentImageIndex];
+    const predictions = file ? segmentationCache[file.name] : null;
+    const is12Teeth = predictions && predictions.length === 12;
+
+    // Segment Gap is enabled when Arch Path is checked. With exactly 12 teeth detected there's
+    // nothing to show (no possible gaps), but the checkbox itself stays checkable regardless.
     gapCb.disabled = !archPathCb.checked;
     if (gapCb.disabled) {
         gapCb.checked = false;
         const gapStatus = document.getElementById('gap-status');
         if (gapStatus) gapStatus.textContent = '';
+    } else {
+        const gapStatus = document.getElementById('gap-status');
+        if (gapStatus) {
+            if (gapCb.checked) {
+                gapStatus.textContent = ' Active';
+                gapStatus.style.color = '#4caf50';
+            } else if (is12Teeth) {
+                gapStatus.textContent = ' Deactivated';
+                gapStatus.style.color = '#f44336';
+            } else {
+                gapStatus.textContent = '';
+            }
+        }
     }
 
-    // FDI is enabled when Segment Gap is checked
-    fdiCb.disabled = !gapCb.checked;
+    // FDI is enabled when Arch Path is checked
+    fdiCb.disabled = !archPathCb.checked;
     if (fdiCb.disabled) {
         fdiCb.checked = false;
         const fdiStatus = document.getElementById('fdi-status');
         if (fdiStatus) fdiStatus.textContent = '';
+    } else {
+        const fdiStatus = document.getElementById('fdi-status');
+        if (fdiStatus) {
+            fdiStatus.textContent = fdiCb.checked ? ' Active' : '';
+            fdiStatus.style.color = fdiCb.checked ? '#4caf50' : '';
+        }
     }
 };
 
@@ -963,6 +1133,8 @@ archPathCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });
+
+
 
 gapCb.addEventListener('change', () => {
     updateCheckboxStates();

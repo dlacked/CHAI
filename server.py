@@ -9,9 +9,9 @@ from flask_cors import CORS
 
 # Load config path if needed, or define locally for simplicity
 ROOT = Path(__file__).resolve().parent
-WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "jaw_classifier_model.pth"
+WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "model" / "jaw_classifier_model.pth"
 if not WEIGHTS_PATH.exists():
-    WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "best_classifier.pth"
+    WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "model" / "best_classifier.pth"
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)

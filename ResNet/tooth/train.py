@@ -133,13 +133,14 @@ class ToothDataset(Dataset):
         else:
             img_tensor = transforms.ToTensor()(pil_img)
             
-        # 4. Meta features: [x1, y1, x2, y2, theta]
+        # 4. Meta features: [x1, y1, x2, y2, theta, mst_seq]
         meta = torch.tensor([
             float(row['x1']),
             float(row['y1']),
             float(row['x2']),
             float(row['y2']),
-            float(row['theta'])
+            float(row['theta']),
+            float(row['mst_seq']) / 11.0  # Normalize sequence index [0..11] to [0..1]
         ], dtype=torch.float32)
         
         return img_tensor, meta, target_label
@@ -160,7 +161,7 @@ class ToothPositionClassifier(nn.Module):
         
         # Meta-feature MLP
         self.meta_fc = nn.Sequential(
-            nn.Linear(5, 64),
+            nn.Linear(6, 64),
             nn.ReLU(),
             nn.Linear(64, 256),
             nn.ReLU()
