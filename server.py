@@ -31,7 +31,7 @@ def index():
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Define model structure (must match ResNet/train.py)
+# Define model structure (must match ResNet/jaw/train.py)
 print("Initializing ResNet18 model...")
 try:
     from torchvision.models import resnet18, ResNet18_Weights
@@ -73,7 +73,7 @@ except Exception as e:
     print(f"Error loading YOLO model: {e}")
     yolo_model = None
 
-# Preprocessing transforms (must match ResNet/train.py validation transforms)
+# Preprocessing transforms (must match ResNet/jaw/train.py validation transforms)
 val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),

@@ -102,7 +102,7 @@ def train_classifier():
         
         train_preds, train_labels_list = [], []
         
-        for inputs, labels in train_loader:
+        for batch_idx, (inputs, labels) in enumerate(train_loader):
             inputs = inputs.to(device)
             labels = labels.to(device)
             
@@ -121,6 +121,8 @@ def train_classifier():
             train_preds.extend(preds.cpu().numpy())
             train_labels_list.extend(labels.cpu().numpy())
             
+            print(f"  [Train] Batch [{batch_idx+1}/{len(train_loader)}] | Loss: {loss.item():.4f} | Running Acc: {running_corrects.double() / len(train_labels_list):.4f}")
+            
         epoch_loss = running_loss / len(train_dataset)
         epoch_acc = running_corrects.double() / len(train_dataset)
         epoch_f1 = f1_score(train_labels_list, train_preds, average='macro')
@@ -137,7 +139,7 @@ def train_classifier():
         val_preds, val_labels_list = [], []
         
         with torch.no_grad():
-            for inputs, labels in val_loader:
+            for batch_idx, (inputs, labels) in enumerate(val_loader):
                 inputs = inputs.to(device)
                 labels = labels.to(device)
                 
@@ -151,6 +153,8 @@ def train_classifier():
                 val_preds.extend(preds.cpu().numpy())
                 val_labels_list.extend(labels.cpu().numpy())
                 
+                print(f"  [Val] Batch [{batch_idx+1}/{len(val_loader)}] | Loss: {loss.item():.4f} | Running Acc: {val_corrects.double() / len(val_labels_list):.4f}")
+                
         val_epoch_loss = val_loss / len(val_dataset)
         val_epoch_acc = val_corrects.double() / len(val_dataset)
         val_epoch_f1 = f1_score(val_labels_list, val_preds, average='macro')
@@ -159,7 +163,7 @@ def train_classifier():
         val_accs.append(val_epoch_acc.item())
         val_f1s.append(val_epoch_f1)
         
-        print(f"Epoch {epoch+1}/{epochs} | "
+        print(f"\nEpoch {epoch+1}/{epochs} | "
               f"Train Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} F1: {epoch_f1:.4f} | "
               f"Val Loss: {val_epoch_loss:.4f} Acc: {val_epoch_acc:.4f} F1: {val_epoch_f1:.4f}")
         
