@@ -9,7 +9,7 @@ class PathConfig:
     
     YOLO_WEIGHTS: Path = ROOT / "YOLO" / "yolov8n-seg.pt" # 세그멘테이션 모델 기본 가중치
     
-    RESNET_DIR: Path = ROOT / "ResNet" # 분류기 관련 디렉터리
+    RESNET_DIR: Path = ROOT / "ResNet" / "jaw" # 분류기 관련 디렉터리
     RESNET_WEIGHTS: Path = RESNET_DIR / "jaw_classifier_model.pth" # 분류기 베스트 가중치 파일
     RESNET_RUNS_DIR: Path = RESNET_DIR / "runs" # 분류기 결과 그래프 저장 디렉터리
 
