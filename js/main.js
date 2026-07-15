@@ -149,7 +149,7 @@ const getClosestPolygonPoints = (polyA, polyB) => {
 // Builds a path through all teeth via nearest-neighbor greedy: starting from the leftmost
 // tooth, repeatedly jump to the closest unvisited tooth. Unlike a general MST, this always
 // produces a simple chain - no tooth can end up with more than two neighbors.
-const computeArchOrder = (vertices, pca) => {
+const computeArchOrder = (vertices, pca, isUpper) => {
     const n = vertices.length;
     if (n === 0) return [];
 
@@ -160,15 +160,45 @@ const computeArchOrder = (vertices, pca) => {
         return (pt.x - pca.center.x) * cos - (pt.y - pca.center.y) * sin;
     };
 
+    const getRotatedY = (pt) => {
+        if (!pca) return pt.y;
+        const cos = Math.cos(-pca.angle);
+        const sin = Math.sin(-pca.angle);
+        return (pt.x - pca.center.x) * sin + (pt.y - pca.center.y) * cos;
+    };
+
     let startIdx = 0;
-    let minRotX = Infinity;
+    let targetVal = isUpper ? -Infinity : Infinity;
+
     vertices.forEach((pt, i) => {
         const rx = getRotatedX(pt);
-        if (rx < minRotX) {
-            minRotX = rx;
-            startIdx = i;
+        const ry = getRotatedY(pt);
+        if (rx < 0) { // Left side of the arch
+            if (isUpper) {
+                if (ry > targetVal) {
+                    targetVal = ry;
+                    startIdx = i;
+                }
+            } else {
+                if (ry < targetVal) {
+                    targetVal = ry;
+                    startIdx = i;
+                }
+            }
         }
     });
+
+    // Fallback if no vertex is on the left side or if targetVal was not updated
+    if (targetVal === -Infinity || targetVal === Infinity) {
+        let minRotX = Infinity;
+        vertices.forEach((pt, i) => {
+            const rx = getRotatedX(pt);
+            if (rx < minRotX) {
+                minRotX = rx;
+                startIdx = i;
+            }
+        });
+    }
 
     const visited = new Array(n).fill(false);
     visited[startIdx] = true;
@@ -258,7 +288,7 @@ const computeGapNormWeight = (predictions, idxA, idxB, W_pca, H_pca, pca) => {
     const normDy = H_pca > 0 ? dyRot / H_pca : 0;
     const normWeight = Math.min(1.0, Math.sqrt(normDx * normDx + normDy * normDy));
 
-    return { normWeight, ptA: res.ptA, ptB: res.ptB };
+    return { normWeight, ptA: res.ptA, ptB: res.ptB, distance: res.distance };
 };
 
 // Walks the arch order and splits it into groups wherever two consecutive teeth are not
@@ -285,6 +315,12 @@ const computeArchGroups = (predictions, order, W_pca, H_pca, pca) => {
 // the original prediction index (values are -1 for teeth that don't fit within 12 slots).
 const computeArchSlots = (predictions, order, W_pca, H_pca, pca) => {
     const slots = new Array(predictions.length).fill(-1);
+    if (predictions.length === 12) {
+        order.forEach((idx, i) => {
+            slots[idx] = i;
+        });
+        return slots;
+    }
     let slot = 0;
     order.forEach((idx, i) => {
         if (i > 0) {
@@ -387,7 +423,7 @@ const redrawCanvas = () => {
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
 
             // Nearest-neighbor greedy order through all teeth
-            const order = computeArchOrder(vertices, pca);
+            const order = computeArchOrder(vertices, pca, isUpper);
 
             // Draw path edges (dashed lines) - no distance labels for now
             for (let i = 0; i < order.length - 1; i++) {
@@ -429,6 +465,11 @@ const redrawCanvas = () => {
                 gapStatus.textContent = ' Requires 2+';
                 gapStatus.style.color = '#f44336';
             }
+        } else if (predictions.length >= 12) {
+            if (gapStatus) {
+                gapStatus.textContent = ' None (12+ Teeth)';
+                gapStatus.style.color = '#4caf50';
+            }
         } else {
             if (gapStatus) {
                 gapStatus.textContent = ' Active';
@@ -439,7 +480,7 @@ const redrawCanvas = () => {
             // only to the next one in that order - this follows the arch's actual curve
             // (unlike a plain X-sort, which breaks down where the arch bends back on itself)
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-            const order = computeArchOrder(vertices, pca);
+            const order = computeArchOrder(vertices, pca, isUpper);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
 
             // Needed to label each gap with the FDI number of the tooth that's missing there
@@ -471,11 +512,12 @@ const redrawCanvas = () => {
                     ? String(fdiLabels[missingSlot])
                     : '?';
 
-                // Draw a two-line label at the middle of the edge: missing FDI number, then "LOSS" below it
+                // Draw a three-line label at the middle of the edge: missing FDI number, "LOSS", and then the distance
                 const midX = (ptA[0] + ptB[0]) / 2;
                 const midY = (ptA[1] + ptB[1]) / 2;
                 const valText = missingLabel;
                 const lossText = 'LOSS';
+                const distText = `${gap.normWeight.toFixed(4)}`;
 
                 ctx.font = 'bold 28px sans-serif';
                 const valWidth = ctx.measureText(valText).width;
@@ -485,14 +527,19 @@ const redrawCanvas = () => {
                 const lossWidth = ctx.measureText(lossText).width;
                 const lossHeight = 20;
 
+                ctx.font = '14px sans-serif';
+                const distWidth = ctx.measureText(distText).width;
+                const distHeight = 14;
+
                 const padding = 12;
                 const lineGap = 4;
-                const boxWidth = Math.max(valWidth, lossWidth) + padding * 2;
-                const boxHeight = padding * 2 + valHeight + lineGap + lossHeight;
+                const boxWidth = Math.max(valWidth, lossWidth, distWidth) + padding * 2;
+                const boxHeight = padding * 2 + valHeight + lineGap + lossHeight + lineGap + distHeight;
                 const boxX = midX - boxWidth / 2;
                 const boxY = midY - boxHeight / 2;
                 const valY = boxY + padding;
                 const lossY = valY + valHeight + lineGap;
+                const distY = lossY + lossHeight + lineGap;
 
                 // Text background box for legibility
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
@@ -514,12 +561,19 @@ const redrawCanvas = () => {
                 ctx.textBaseline = 'top';
                 ctx.fillText(valText, midX, valY);
 
-                // "LOSS" label (bottom line, white)
+                // "LOSS" label (middle line, white)
                 ctx.font = 'bold 20px sans-serif';
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
                 ctx.fillText(lossText, midX, lossY);
+
+                // Distance label (bottom line, soft pink)
+                ctx.font = '14px sans-serif';
+                ctx.fillStyle = '#ffb3c6';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(distText, midX, distY);
             }
         }
     } else {
@@ -538,7 +592,7 @@ const redrawCanvas = () => {
             }
         } else {
             const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-            const order = computeArchOrder(vertices, pca);
+            const order = computeArchOrder(vertices, pca, isUpper);
             const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
 
             // Teeth that are touching share one group; a break between groups is a missing
