@@ -116,9 +116,12 @@ const getClosestPolygonPoints = (polyA, polyB) => {
     return { distance: minDist, ptA, ptB };
 };
 
-// Builds a path through all teeth via nearest-neighbor greedy: starting from the leftmost
-// tooth, repeatedly jump to the closest unvisited tooth. Unlike a general MST, this always
-// produces a simple chain - no tooth can end up with more than two neighbors.
+// Builds the shortest possible path through all teeth via Held-Karp dynamic programming,
+// starting from the leftmost tooth. Unlike nearest-neighbor greedy, this finds the globally
+// optimal path rather than a locally greedy one - for points strung along a single curve like
+// a dental arch, the shortest path reliably follows the curve's true order, even in edge cases
+// where greedy can leave a straggler tooth that needs a long final jump. With at most ~15-20
+// teeth the O(2^n * n^2) cost is trivial (well under a millisecond).
 const computeArchOrder = (vertices, pca, isUpper) => {
     const n = vertices.length;
     if (n === 0) return [];
@@ -170,28 +173,70 @@ const computeArchOrder = (vertices, pca, isUpper) => {
         });
     }
 
-    const visited = new Array(n).fill(false);
-    visited[startIdx] = true;
-    const order = [startIdx];
+    if (n === 1) return [startIdx];
 
-    while (order.length < n) {
-        const curr = vertices[order[order.length - 1]];
-        let nextIdx = -1;
-        let minDist = Infinity;
-        for (let i = 0; i < n; i++) {
-            if (visited[i]) continue;
-            const dx = vertices[i].x - curr.x;
-            const dy = vertices[i].y - curr.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < minDist) {
-                minDist = dist;
-                nextIdx = i;
+    // Precompute pairwise distances between every pair of teeth
+    const dist = Array.from({ length: n }, () => new Array(n).fill(0));
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const dx = vertices[i].x - vertices[j].x;
+            const dy = vertices[i].y - vertices[j].y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            dist[i][j] = d;
+            dist[j][i] = d;
+        }
+    }
+
+    // dp[mask][j] = shortest path that visits exactly the teeth in `mask` (always including
+    // startIdx) and ends at tooth j. parent[mask][j] records the tooth visited right before j.
+    const size = 1 << n;
+    const dp = Array.from({ length: size }, () => new Array(n).fill(Infinity));
+    const parent = Array.from({ length: size }, () => new Array(n).fill(-1));
+
+    const startMask = 1 << startIdx;
+    dp[startMask][startIdx] = 0;
+
+    for (let mask = 0; mask < size; mask++) {
+        if (!(mask & startMask)) continue; // every path must include the starting tooth
+        for (let j = 0; j < n; j++) {
+            if (!(mask & (1 << j))) continue;
+            const costToJ = dp[mask][j];
+            if (costToJ === Infinity) continue;
+
+            for (let k = 0; k < n; k++) {
+                if (mask & (1 << k)) continue; // already visited
+                const nextMask = mask | (1 << k);
+                const newCost = costToJ + dist[j][k];
+                if (newCost < dp[nextMask][k]) {
+                    dp[nextMask][k] = newCost;
+                    parent[nextMask][k] = j;
+                }
             }
         }
-        if (nextIdx === -1) break;
-        visited[nextIdx] = true;
-        order.push(nextIdx);
     }
+
+    // Pick whichever tooth minimizes total path length once every tooth has been visited
+    const fullMask = size - 1;
+    let bestEnd = startIdx;
+    let bestCost = Infinity;
+    for (let j = 0; j < n; j++) {
+        if (dp[fullMask][j] < bestCost) {
+            bestCost = dp[fullMask][j];
+            bestEnd = j;
+        }
+    }
+
+    // Reconstruct the path by walking the parent pointers backward from the end
+    const order = [];
+    let mask = fullMask;
+    let curr = bestEnd;
+    while (curr !== -1) {
+        order.push(curr);
+        const prev = parent[mask][curr];
+        mask ^= (1 << curr);
+        curr = prev;
+    }
+    order.reverse();
     return order;
 };
 
