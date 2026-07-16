@@ -253,11 +253,11 @@ def evaluate():
         
     plt.suptitle("Clustered Gap-Based FDI Labeling Performance (Val Lower Only - Cleaned)", fontsize=15, fontweight='bold', y=0.98)
     
-    # Save graph in functions/graph directory
-    output_dir = r"c:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\functions\graph"
+    # Save graph in functions/stats/graph directory
+    output_dir = r"c:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\functions\stats\graph"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "fdi_accuracy_by_count.png")
-    
+
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\nClustered Rule accuracy graph (Lower Only) saved successfully to: {output_path}")
 

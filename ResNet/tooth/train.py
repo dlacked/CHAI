@@ -75,24 +75,25 @@ class ToothDataset(Dataset):
         
         fdi_number = self._get_fdi_number(mst_seq)
         cache_key = (image_name, fdi_number)
-        
+
+        # 1. Load original image (always re-read; only the bbox is cached, not the pixels)
+        img_path = self.dataset_dir / self.split / "images" / self.jaw / image_name
+        image = cv2.imread(str(img_path))
+        if image is None:
+            # Fallback if image file is not found
+            image = np.zeros((224, 224, 3), dtype=np.uint8)
+
+        h, w = image.shape[:2]
+
         if cache_key in self.crop_cache:
-            pil_img = self.crop_cache[cache_key]
+            x1, y1, x2, y2 = self.crop_cache[cache_key]
         else:
-            # 1. Load original image
-            img_path = self.dataset_dir / self.split / "images" / self.jaw / image_name
-            image = cv2.imread(str(img_path))
-            if image is None:
-                # Fallback if image file is not found
-                image = np.zeros((224, 224, 3), dtype=np.uint8)
-                
-            h, w = image.shape[:2]
             x1, y1, x2, y2 = 0, 0, w, h
-            
+
             # 2. Get full FDI number for GT JSON lookup
             image_name_no_ext = os.path.splitext(image_name)[0]
             json_path = self.dataset_dir / self.split / "labels_json" / self.jaw / f"{image_name_no_ext}.json"
-            
+
             if json_path.exists():
                 try:
                     with open(json_path, 'r', encoding='utf-8') as f:
@@ -105,10 +106,10 @@ class ToothDataset(Dataset):
                                     poly = np.array(seg)
                                 else:
                                     poly = np.array(seg).reshape(-1, 2)
-                                
+
                                 x_min, y_min = poly.min(axis=0)
                                 x_max, y_max = poly.max(axis=0)
-                                
+
                                 # Add some crop padding
                                 pad = 10
                                 x1 = int(max(0, x_min - pad))
@@ -118,15 +119,16 @@ class ToothDataset(Dataset):
                                 break
                 except Exception as e:
                     print(f"Error loading GT json for crop: {e}")
-                    
-            # 3. Crop the tooth
-            cropped = image[y1:y2, x1:x2]
-            if cropped.size == 0:
-                cropped = np.zeros((224, 224, 3), dtype=np.uint8)
-                
-            cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(cropped_rgb)
-            self.crop_cache[cache_key] = pil_img
+
+            self.crop_cache[cache_key] = (x1, y1, x2, y2)
+
+        # 3. Crop the tooth
+        cropped = image[y1:y2, x1:x2]
+        if cropped.size == 0:
+            cropped = np.zeros((224, 224, 3), dtype=np.uint8)
+
+        cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(cropped_rgb)
             
         if self.transform:
             img_tensor = self.transform(pil_img)
@@ -182,7 +184,7 @@ class ToothPositionClassifier(nn.Module):
         logits = self.classifier(combined)
         return torch.softmax(logits, dim=1)
 
-def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path, runs_dir, epochs, batch_size, lr):
+def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path, runs_dir, epochs, batch_size, lr, patience=10):
     # Ensure save directory and runs directory exist
     Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
     Path(runs_dir).mkdir(parents=True, exist_ok=True)
@@ -237,10 +239,12 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     best_acc = 0.0
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
     train_f1s, val_f1s = [], []
-    
+
     # 4. Training loop
     print(f"\nStarting ResNet18 Tooth Classifier (6 classes) training for {jaw.upper()} jaw...")
     for epoch in range(epochs):
@@ -322,11 +326,22 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
             best_acc = val_epoch_acc
             torch.save(model.state_dict(), model_save_path)
             print(f"  --> Saved new best model to {model_save_path} (Val Acc: {best_acc:.4f})")
-            
+
+        # Early stopping based on validation loss
+        if val_epoch_loss < best_val_loss:
+            best_val_loss = val_epoch_loss
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            print(f"  --> No improvement in Val Loss for {epochs_no_improve}/{patience} epochs.")
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Loss improvement for {patience} epochs).")
+                break
+
     print(f"\nTraining completed. Best Validation Accuracy: {best_acc:.4f}")
-    
+
     # 5. Plot and save metrics history plot
-    epochs_range = range(1, epochs + 1)
+    epochs_range = range(1, len(train_losses) + 1)
     plt.figure(figsize=(15, 5))
     
     # Loss plot
@@ -404,13 +419,15 @@ def main():
                         help="Jaw model to train: lower or upper (default: lower)")
     parser.add_argument("--dataset_dir", type=str, default=str(dataset_dir),
                         help="Path to the dataset folder")
-    parser.add_argument("--epochs", type=int, default=15,
-                        help="Number of epochs to train (default: 15)")
-    parser.add_argument("--batch_size", type=int, default=32,
-                        help="Batch size for training (default: 32)")
+    parser.add_argument("--epochs", type=int, default=100,
+                        help="Number of epochs to train (default: 100)")
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size for training (default: 4)")
     parser.add_argument("--lr", type=float, default=1e-4,
                         help="Learning rate (default: 1e-4)")
-                        
+    parser.add_argument("--patience", type=int, default=10,
+                        help="Early stopping patience in epochs (default: 10)")
+
     args = parser.parse_args()
     
     train_csv_path = csv_dir / f"{args.jaw}_features_train.csv"
@@ -426,7 +443,8 @@ def main():
         runs_dir=runs_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        lr=args.lr
+        lr=args.lr,
+        patience=args.patience
     )
 
 if __name__ == "__main__":

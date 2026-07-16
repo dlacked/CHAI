@@ -85,9 +85,12 @@ def train_classifier():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     
-    epochs = 5
+    epochs = 100
+    patience = 10
     best_acc = 0.0
-    
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+
     # Lists to store metrics for plotting
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -172,11 +175,22 @@ def train_classifier():
             best_acc = val_epoch_acc
             torch.save(model.state_dict(), PathConfig.RESNET_WEIGHTS)
             print(f"  --> Saved new best model weights with validation accuracy: {best_acc:.4f}")
-            
+
+        # Early stopping based on validation loss
+        if val_epoch_loss < best_val_loss:
+            best_val_loss = val_epoch_loss
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            print(f"  --> No improvement in Val Loss for {epochs_no_improve}/{patience} epochs.")
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Loss improvement for {patience} epochs).")
+                break
+
     print(f"\nTraining completed. Best validation accuracy: {best_acc:.4f}")
-    
+
     # 6. Save training metrics history plot
-    epochs_range = range(1, epochs + 1)
+    epochs_range = range(1, len(train_losses) + 1)
     plt.figure(figsize=(15, 5))
     
     # Plot Loss

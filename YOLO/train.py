@@ -21,7 +21,8 @@ def train_yolo() -> None:
     model = YOLO(str(PathConfig.YOLO_WEIGHTS))
     model.train(
         data=str(data_yaml),
-        epochs=40,
+        epochs=100,
+        patience=20,
         imgsz=640,
         rect=True,
         batch=16,

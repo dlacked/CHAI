@@ -118,15 +118,7 @@ def clean_dataset():
                             os.remove(img_path)
                         except Exception as e:
                             print(f"Error removing image: {e}")
-                            
-                    # 4. Delete matching masking images
-                    mask_pattern = os.path.join(dataset_root, split, "masking_images", jaw, f"{sample_name}.*")
-                    for mask_path in glob.glob(mask_pattern):
-                        try:
-                            os.remove(mask_path)
-                        except Exception as e:
-                            print(f"Error removing masking image: {e}")
-                            
+
                     total_deleted += 1
                     
     print(f"\nCleanup complete. Total mirrored samples deleted: {total_deleted}")
