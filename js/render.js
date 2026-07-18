@@ -372,11 +372,11 @@ const drawFdiDebugLabel = (pred, vertexIdx, order, slots, fdiLabels, pca) => {
         }
     }
 
-    const mst_seq = order.indexOf(vertexIdx);
+    const archSeq = order.indexOf(vertexIdx);
 
     // 4. Build text lines
     const lines = [];
-    lines.push(`Seq: ${mst_seq}`);
+    lines.push(`Seq: ${archSeq}`);
     lines.push(`x1:${x1_norm.toFixed(4)} y1:${y1_norm.toFixed(4)}`);
     lines.push(`x2:${x2_norm.toFixed(4)} y2:${y2_norm.toFixed(4)}`);
     lines.push(`θ:${theta_val.toFixed(6)}`);

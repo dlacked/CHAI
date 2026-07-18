@@ -16,7 +16,6 @@ if str(features_dir) not in sys.path:
 from coords import get_normalized_coords
 from fdi_last import get_centroid
 from theta import get_theta_values, calculate_pca_rotation
-from MST_seq import get_mst_seq
 
 def process_jaw(jaw, split, dataset_dir, output_csv):
     json_dir = Path(dataset_dir) / split / "labels_json" / jaw
@@ -114,8 +113,7 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
             for seg_idx, seg_data in enumerate(sorted_segments):
                 fdi_number = seg_data["fdi_number"]
                 fdi_digit = fdi_number % 10
-                mst_val = get_mst_seq(fdi_number)
-                
+
                 # Rotate into the PCA frame, mirror (x flip), and normalize coordinates
                 x1, y1, x2, y2 = get_normalized_coords(seg_data["poly"], mean_pt, angle, img_size, fdi_number)
                 
@@ -139,7 +137,7 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
                     y2,
                     theta_val,
                     fdi_digit,
-                    mst_val
+                    fdi_number
                 ])
                 
         except Exception as e:
@@ -156,7 +154,9 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
     output_csv = Path(output_csv)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     
-    headers = ["image_name", "x1", "y1", "x2", "y2", "theta", "fdi_last_digit"]
+    # fdi_number is the full 2-digit FDI tooth number - not a model input, it's only there so
+    # ResNet/tooth/train.py's ToothDataset can look the tooth back up in the GT JSON for cropping
+    headers = ["image_name", "x1", "y1", "x2", "y2", "theta", "fdi_last_digit", "fdi_number"]
     
     try:
         with open(output_csv, "w", newline="", encoding="utf-8") as f:

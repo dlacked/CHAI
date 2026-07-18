@@ -32,48 +32,29 @@ class ToothDataset(Dataset):
             reader = csv.DictReader(f)
             for row in reader:
                 fdi_digit = row.get('fdi_last_digit')
-                mst_seq = row.get('mst_seq')
                 if fdi_digit is not None and fdi_digit != "" and int(fdi_digit) != -1:
                     # Double check it is in 1~6 range just in case
                     if 1 <= int(fdi_digit) <= 6:
                         self.rows.append(row)
-                    
+
         self.dataset_dir = Path(dataset_dir)
         self.jaw = jaw
         self.split = split
         self.transform = transform
         self.crop_cache = {}
-        
+
     def __len__(self):
         return len(self.rows)
-        
-    def _get_fdi_number(self, mst_seq):
-        """
-        Reverse-map the 0-based mst_seq slot back to the 2-digit FDI tooth number.
-        """
-        mst_seq = int(mst_seq)
-        if self.jaw == "lower":
-            if 0 <= mst_seq <= 5:
-                return 40 + (6 - mst_seq)
-            elif 6 <= mst_seq <= 11:
-                return 30 + (mst_seq - 5)
-        else:  # upper
-            if 0 <= mst_seq <= 5:
-                return 10 + (6 - mst_seq)
-            elif 6 <= mst_seq <= 11:
-                return 20 + (mst_seq - 5)
-        return -1
 
     def __getitem__(self, idx):
         row = self.rows[idx]
         image_name = row['image_name']
         fdi_digit = int(row['fdi_last_digit'])
-        mst_seq = int(row['mst_seq'])
-        
+        fdi_number = int(row['fdi_number'])
+
         # Target label is 0-indexed (0 to 5 range for 6 classes: fdi_digit 1 to 6)
         target_label = fdi_digit - 1
-        
-        fdi_number = self._get_fdi_number(mst_seq)
+
         cache_key = (image_name, fdi_number)
 
         # 1. Load original image (always re-read; only the bbox is cached, not the pixels)
@@ -90,7 +71,7 @@ class ToothDataset(Dataset):
         else:
             x1, y1, x2, y2 = 0, 0, w, h
 
-            # 2. Get full FDI number for GT JSON lookup
+            # 2. Look up this tooth's GT polygon by fdi_number for an accurate crop
             image_name_no_ext = os.path.splitext(image_name)[0]
             json_path = self.dataset_dir / self.split / "labels_json" / self.jaw / f"{image_name_no_ext}.json"
 
