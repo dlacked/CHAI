@@ -21,11 +21,11 @@ def train_yolo() -> None:
     model = YOLO(str(PathConfig.YOLO_WEIGHTS))
     model.train(
         data=str(data_yaml),
-        epochs=100,
+        epochs=1000,
         patience=20,
         imgsz=640,
         rect=True,
-        batch=16,
+        batch=8,
         device=0,
         close_mosaic=0,
         project=str(PathConfig.RUNS_DIR),

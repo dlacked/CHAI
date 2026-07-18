@@ -59,8 +59,8 @@ def train_classifier():
     print(f"Number of training images: {len(train_dataset)}")
     print(f"Number of validation images: {len(val_dataset)}")
     
-    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True)
 
     # 3. Model initialization (ResNet18)
     print("Initializing ResNet18 model...")
@@ -85,7 +85,7 @@ def train_classifier():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     
-    epochs = 100
+    epochs = 1000
     patience = 10
     best_acc = 0.0
     best_val_loss = float('inf')

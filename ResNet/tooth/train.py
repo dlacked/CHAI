@@ -135,14 +135,13 @@ class ToothDataset(Dataset):
         else:
             img_tensor = transforms.ToTensor()(pil_img)
             
-        # 4. Meta features: [x1, y1, x2, y2, theta, mst_seq]
+        # 4. Meta features: [x1, y1, x2, y2, theta]
         meta = torch.tensor([
             float(row['x1']),
             float(row['y1']),
             float(row['x2']),
             float(row['y2']),
-            float(row['theta']),
-            float(row['mst_seq']) / 11.0  # Normalize sequence index [0..11] to [0..1]
+            float(row['theta'])
         ], dtype=torch.float32)
         
         return img_tensor, meta, target_label
@@ -163,7 +162,7 @@ class ToothPositionClassifier(nn.Module):
         
         # Meta-feature MLP
         self.meta_fc = nn.Sequential(
-            nn.Linear(6, 64),
+            nn.Linear(5, 64),
             nn.ReLU(),
             nn.Linear(64, 256),
             nn.ReLU()
@@ -419,8 +418,8 @@ def main():
                         help="Jaw model to train: lower or upper (default: lower)")
     parser.add_argument("--dataset_dir", type=str, default=str(dataset_dir),
                         help="Path to the dataset folder")
-    parser.add_argument("--epochs", type=int, default=100,
-                        help="Number of epochs to train (default: 100)")
+    parser.add_argument("--epochs", type=int, default=1000,
+                        help="Number of epochs to train (default: 1000)")
     parser.add_argument("--batch_size", type=int, default=4,
                         help="Batch size for training (default: 4)")
     parser.add_argument("--lr", type=float, default=1e-4,
