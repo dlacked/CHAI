@@ -19,6 +19,7 @@ let currentObjectURL = null;
 let currentImage = null;
 const classificationCache = {};
 const segmentationCache = {};
+const toothAnalysisCache = {};
 
 const canvas = document.getElementById('raw-canvas');
 const ctx = canvas.getContext('2d');

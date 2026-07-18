@@ -202,6 +202,7 @@ const updateCheckboxStates = () => {
         fdiCb.checked = false;
         const fdiStatus = document.getElementById('fdi-status');
         if (fdiStatus) fdiStatus.textContent = '';
+        clearAnalysisResult();
     }
 };
 

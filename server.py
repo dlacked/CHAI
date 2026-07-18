@@ -1,4 +1,5 @@
 import io
+import base64
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -52,6 +53,60 @@ else:
 
 model.to(device)
 model.eval()
+
+# Load tooth classifier model(s)
+TOOTH_MODEL_DIR = ROOT / "ResNet" / "tooth" / "model"
+TOOTH_MODEL_PATHS = {
+    "lower": TOOTH_MODEL_DIR / "lower_best.pth",
+    "upper": TOOTH_MODEL_DIR / "upper_best.pth"
+}
+
+def build_tooth_model(num_classes=6):
+    try:
+        backbone = models.resnet18(weights=None)
+    except Exception:
+        backbone = models.resnet18()
+    num_ftrs = backbone.fc.in_features
+    backbone.fc = nn.Identity()
+
+    class ToothPositionClassifier(nn.Module):
+        def __init__(self, backbone, num_ftrs, num_classes=6):
+            super(ToothPositionClassifier, self).__init__()
+            self.resnet = backbone
+            self.meta_fc = nn.Sequential(
+                nn.Linear(5, 64),
+                nn.ReLU(),
+                nn.Linear(64, 256),
+                nn.ReLU()
+            )
+            self.classifier = nn.Sequential(
+                nn.Linear(num_ftrs + 256, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_classes)
+            )
+
+        def forward(self, img, meta):
+            img_features = self.resnet(img)
+            meta_features = self.meta_fc(meta)
+            combined = torch.cat((img_features, meta_features), dim=1)
+            logits = self.classifier(combined)
+            return torch.softmax(logits, dim=1)
+
+    return ToothPositionClassifier(backbone, num_ftrs, num_classes)
+
+
+tooth_models = {}
+for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
+    if model_path.exists():
+        print(f"Loading tooth model for {jaw_name} from {model_path}...")
+        tooth_model = build_tooth_model(num_classes=6)
+        tooth_model.load_state_dict(torch.load(model_path, map_location=device))
+        tooth_model.to(device)
+        tooth_model.eval()
+        tooth_models[jaw_name] = tooth_model
+    else:
+        print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
 # Initialize YOLO segmentation model
 print("Initializing YOLO segmentation model...")
@@ -175,6 +230,67 @@ def segment():
         })
     except Exception as e:
         print(f"Error during segmentation: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/tooth_predict', methods=['POST'])
+def tooth_predict():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+    jaw = payload.get('jaw')
+    teeth = payload.get('teeth')
+
+    if jaw not in tooth_models:
+        return jsonify({'success': False, 'error': f'Tooth model not available for jaw: {jaw}'}), 400
+    if not teeth or not isinstance(teeth, list):
+        return jsonify({'success': False, 'error': 'No teeth provided for prediction'}), 400
+
+    try:
+        input_images = []
+        input_meta = []
+
+        for idx, tooth in enumerate(teeth):
+            crop_data = tooth.get('crop')
+            if not crop_data:
+                return jsonify({'success': False, 'error': f'Crop image missing for tooth #{idx}'}), 400
+
+            if ',' in crop_data:
+                crop_data = crop_data.split(',', 1)[1]
+            crop_bytes = base64.b64decode(crop_data)
+            image = Image.open(io.BytesIO(crop_bytes)).convert('RGB')
+            input_images.append(val_transform(image))
+
+            meta_vector = [
+                float(tooth.get('x1', 0.0)),
+                float(tooth.get('y1', 0.0)),
+                float(tooth.get('x2', 0.0)),
+                float(tooth.get('y2', 0.0)),
+                float(tooth.get('theta', 0.0))
+            ]
+            input_meta.append(torch.tensor(meta_vector, dtype=torch.float32))
+
+        input_images = torch.stack(input_images).to(device)
+        input_meta = torch.stack(input_meta).to(device)
+
+        model = tooth_models[jaw]
+        with torch.no_grad():
+            # Model's forward() already applies softmax, so outputs are class probabilities
+            outputs = model(input_images, input_meta)
+            confidences, preds = torch.max(outputs, dim=1)
+
+        predictions = []
+        for i in range(len(teeth)):
+            predictions.append({
+                'probs': [float(p) for p in outputs[i].cpu().tolist()],
+                'class_idx': int(preds[i].item()),
+                'predicted_last_digit': int(preds[i].item()) + 1,
+                'confidence': float(confidences[i].item())
+            })
+
+        return jsonify({'success': True, 'predictions': predictions})
+    except Exception as e:
+        print(f"Error during tooth prediction: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':

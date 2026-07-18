@@ -427,10 +427,11 @@ const drawFdiDebugLabel = (pred, vertexIdx, order, slots, fdiLabels, pca) => {
 };
 
 // Labels teeth in nearest-neighbor arch order regardless of tooth count
-const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification) => {
+const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, file) => {
     if (!fdiCb.checked || !predictions || !pca) {
         const fdiStatus = document.getElementById('fdi-status');
         if (fdiStatus) fdiStatus.textContent = '';
+        clearAnalysisResult();
         return;
     }
 
@@ -441,6 +442,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification) =
             fdiStatus.textContent = ' Requires Jaw Classification';
             fdiStatus.style.color = '#f44336';
         }
+        clearAnalysisResult();
         return;
     }
 
@@ -467,6 +469,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification) =
 
     if (predictions.length === 12) {
         if (fdiStatus) fdiStatus.textContent = '';
+        clearAnalysisResult();
         drawFdiLabels();
         return;
     }
@@ -474,7 +477,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification) =
     // Fewer than 12 teeth detected. Walk the arch order and count adjacent pairs that
     // are NOT touching (each gap = exactly one missing tooth by assumption). If detected
     // teeth + gaps reconstructs to exactly 12, the slot assignment is trustworthy - label
-    // normally. Otherwise fall back to the raw debug view.
+    // normally. Otherwise fall back to the ResNet Tooth model (Holding state).
     let lossCount = 0;
     for (let i = 0; i < order.length - 1; i++) {
         const gap = computeGapNormWeight(predictions, order[i], order[i + 1], W_pca, H_pca, pca);
@@ -486,20 +489,54 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification) =
 
     if (reconstructedTotal === 12) {
         if (fdiStatus) fdiStatus.textContent = '';
+        clearAnalysisResult();
         drawFdiLabels();
         return;
     }
 
-    if (fdiStatus) {
-        fdiStatus.textContent = ' Holding';
-        fdiStatus.style.color = '#f44336';
+    // Holding: the 12-slot layout can't be trusted. Fall back to the ResNet Tooth model - it
+    // predicts each tooth's FDI last digit directly from its crop + true-PCA meta features
+    // (see computeToothMeta), independent of slot count. The quadrant (tens digit) is derived
+    // geometrically from which side of the true PCA centerline the tooth sits on, so it
+    // doesn't depend on all 12 teeth being present either.
+    const jaw = isUpper ? 'upper' : 'lower';
+    const centroidPca = calculateCentroidPCA(vertices);
+    const cached = file ? toothAnalysisCache[file.name] : null;
+
+    if (cached && cached.status === 'done' && cached.order) {
+        if (fdiStatus) {
+            fdiStatus.textContent = ' Holding (ResNet)';
+            fdiStatus.style.color = '#ff9800';
+        }
+        predictions.forEach((pred, vertexIdx) => {
+            const pos = cached.order.indexOf(vertexIdx);
+            if (pos === -1 || pos >= cached.rows.length) return;
+
+            const row = cached.rows[pos];
+            const { tx } = rotateToPcaFrame(vertices[vertexIdx].x, vertices[vertexIdx].y, centroidPca);
+            const tens = computeQuadrantTens(tx, isUpper);
+            const fdiNumber = tens * 10 + (row.classIdx + 1);
+
+            const centerX = (pred.box[0] + pred.box[2]) / 2;
+            const centerY = (pred.box[1] + pred.box[3]) / 2;
+            drawFdiNumberBadge(centerX, centerY, String(fdiNumber));
+        });
+    } else {
+        const isError = cached && cached.status === 'error';
+        if (fdiStatus) {
+            fdiStatus.textContent = isError ? ' Holding (Model Error)' : ' Holding (Predicting...)';
+            fdiStatus.style.color = '#f44336';
+        }
+        // While the prediction request is in flight (or failed), draw the raw coordinates,
+        // theta, and greedy sequence numbers instead
+        predictions.forEach((pred, vertexIdx) => {
+            drawFdiDebugLabel(pred, vertexIdx, order, slots, fdiLabels, pca);
+        });
     }
 
-    // 11 or fewer teeth (and the gap count doesn't reconstruct to 12): draw
-    // coordinates, theta, and greedy sequence numbers instead
-    predictions.forEach((pred, vertexIdx) => {
-        drawFdiDebugLabel(pred, vertexIdx, order, slots, fdiLabels, pca);
-    });
+    if (file) {
+        runToothAnalysis(file, jaw, predictions, centroidPca);
+    }
 };
 
 const redrawCanvas = () => {
@@ -537,7 +574,7 @@ const redrawCanvas = () => {
     drawPcaOverlay(pca);
     drawArchPath(predictions, pca, isUpper);
     drawSegmentGap(predictions, pca, isUpper, isLower, hasClassification);
-    drawFdiNumbers(predictions, pca, isUpper, isLower, hasClassification);
+    drawFdiNumbers(predictions, pca, isUpper, isLower, hasClassification, file);
 
     ctx.restore();
 };
