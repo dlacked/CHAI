@@ -157,11 +157,11 @@ const clearAnalysisResult = () => {
 // computed the same way as the GT feature extraction pipeline in functions/features/) to the
 // ResNet Tooth model and caches the full 6-class probability vector for each tooth, ordered
 // left-to-right along the arch (see computeArchOrder) - this is what powers both the ANALYSIS
-// RESULT panel and the Holding-state FDI badges. `centroidPca` must be the true centroid PCA
-// (calculateCentroidPCA), NOT the overlay heuristic pca from redrawCanvas - the two are
-// different transforms and only the former matches training. Triggers a redrawCanvas() once
-// the result lands so the FDI badges can swap over from the raw debug view.
-const runToothAnalysis = (file, jaw, predictions, centroidPca) => {
+// RESULT panel and the Holding-state FDI badges. `pca` is the shared PCA from
+// calculatePCARotation() (redrawCanvas) - the same PCA used for the overlay, arch ordering,
+// and the training CSVs (functions/features/theta.py calculate_pca_rotation). Triggers a
+// redrawCanvas() once the result lands so the FDI badges can swap over from the raw debug view.
+const runToothAnalysis = (file, jaw, predictions, pca) => {
     const statusEl = document.getElementById('analysis-status');
     const existing = toothAnalysisCache[file.name];
     if (existing && (existing.status === 'loading' || existing.status === 'done')) {
@@ -181,8 +181,8 @@ const runToothAnalysis = (file, jaw, predictions, centroidPca) => {
     renderAnalysisResult(file);
 
     const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-    const order = computeArchOrder(vertices, centroidPca, jaw === 'upper');
-    const metas = predictions.map(pred => computeToothMeta(pred, centroidPca));
+    const order = computeArchOrder(vertices, pca, jaw === 'upper');
+    const metas = predictions.map(pred => computeToothMeta(pred, pca));
 
     const teeth = order.map(idx => ({
         crop: cropToothImage(currentImage, predictions[idx].box),

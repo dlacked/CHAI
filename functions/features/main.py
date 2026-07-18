@@ -5,7 +5,6 @@ import argparse
 import glob
 import json
 from pathlib import Path
-import numpy as np
 from PIL import Image
 
 # Ensure this directory is in sys.path for direct imports
@@ -80,31 +79,27 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
                 else:
                     poly = [[seg[i], seg[i+1]] for i in range(0, len(seg), 2)]
                     
-                # Bounding box
-                arr = np.array(poly)
-                x_min, y_min = arr.min(axis=0)
-                x_max, y_max = arr.max(axis=0)
-                box = [x_min, y_min, x_max, y_max]
-                
                 # Centroid
                 c = get_centroid(poly)
-                
+
                 segments_data.append({
                     "fdi_number": num,
                     "poly": poly,
-                    "box": box,
                     "centroid": c
                 })
                 
             if not segments_data:
                 continue
                 
-            # Calculate PCA rotation center (mean_pt)
+            # Calculate the PCA rotation (mean_pt, angle) via covariance eigen-decomposition -
+            # the single PCA used everywhere: this CSV pipeline, the site's "PCA" overlay
+            # checkbox, and computeToothMeta() at inference time (see js/geometry.js
+            # calculatePCARotation, which mirrors this function exactly).
             centroids = [item["centroid"] for item in segments_data]
-            mean_pt, _ = calculate_pca_rotation(centroids)
-            
+            mean_pt, angle = calculate_pca_rotation(centroids)
+
             # Get PCA rotated coordinates and theta values
-            pca_results = get_theta_values(centroids)
+            pca_results = get_theta_values(centroids, mean_pt, angle)
             
             # Add rotated_x and theta angle to segments_data
             for i, item in enumerate(segments_data):
@@ -121,8 +116,8 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
                 fdi_digit = fdi_number % 10
                 mst_val = get_mst_seq(fdi_number)
                 
-                # Center, mirror (x flip), and normalize coordinates
-                x1, y1, x2, y2 = get_normalized_coords(seg_data["box"], mean_pt, img_size, fdi_number)
+                # Rotate into the PCA frame, mirror (x flip), and normalize coordinates
+                x1, y1, x2, y2 = get_normalized_coords(seg_data["poly"], mean_pt, angle, img_size, fdi_number)
                 
                 # Mirror theta angle if FDI tens digit is 2 or 3
                 theta_val_raw = seg_data["theta"]
@@ -161,7 +156,7 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
     output_csv = Path(output_csv)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     
-    headers = ["image_name", "x1", "y1", "x2", "y2", "theta", "fdi_last_digit", "mst_seq"]
+    headers = ["image_name", "x1", "y1", "x2", "y2", "theta", "fdi_last_digit"]
     
     try:
         with open(output_csv, "w", newline="", encoding="utf-8") as f:

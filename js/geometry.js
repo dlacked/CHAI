@@ -1,79 +1,82 @@
-const calculatePCARotation = (predictions, canvasWidth, isUpper) => {
+// True PCA over all detected teeth: mean centroid position + principal-axis angle from an
+// eigen-decomposition of the centroid covariance matrix. This is the single PCA used
+// everywhere on the site - the "PCA" overlay checkbox, arch ordering, FDI badges, and the
+// ResNet Tooth model's meta features (computeToothMeta) - and matches functions/features/
+// theta.py's calculate_pca_rotation() exactly, which is what builds the training CSVs.
+const calculatePCARotation = (predictions) => {
     if (!predictions || predictions.length === 0) return null;
 
-    let leftPoints = [];
-    let rightPoints = [];
+    const centroids = predictions
+        .filter(pred => pred.polygon && pred.polygon.length > 0)
+        .map(pred => computeCentroid(pred.polygon));
 
-    predictions.forEach(pred => {
-        const poly = pred.polygon;
-        if (!poly || poly.length === 0) return;
+    const n = centroids.length;
+    if (n === 0) return null;
 
-        poly.forEach(pt => {
-            const x = pt[0];
-            const y = pt[1];
+    let meanX = 0, meanY = 0;
+    centroids.forEach(c => { meanX += c.x; meanY += c.y; });
+    meanX /= n;
+    meanY /= n;
 
-            if (x < canvasWidth / 2) {
-                leftPoints.push({ x, y });
-            } else {
-                rightPoints.push({ x, y });
-            }
+    let angle = 0;
+    if (n >= 2) {
+        let sxx = 0, syy = 0, sxy = 0;
+        centroids.forEach(c => {
+            const dx = c.x - meanX;
+            const dy = c.y - meanY;
+            sxx += dx * dx;
+            syy += dy * dy;
+            sxy += dx * dy;
         });
-    });
+        const denom = n - 1;
+        const covXX = sxx / denom;
+        const covYY = syy / denom;
+        const covXY = sxy / denom;
 
-    if (leftPoints.length === 0 || rightPoints.length === 0) return null;
+        if (Math.abs(covXX) > 1e-9 || Math.abs(covYY) > 1e-9 || Math.abs(covXY) > 1e-9) {
+            // Eigen-decomposition of the symmetric 2x2 matrix [[covXX, covXY], [covXY, covYY]] -
+            // take the eigenvector for the larger eigenvalue (principal axis), matching
+            // np.linalg.eigh + descending sort + evecs[:, 0] in the Python pipeline
+            const trace = covXX + covYY;
+            const det = covXX * covYY - covXY * covXY;
+            const disc = Math.sqrt(Math.max(0, trace * trace - 4 * det));
+            const lambda1 = (trace + disc) / 2;
 
-    // targetY 찾기 (lower의 경우 min y, upper의 경우 max y)
-    let pLeft = null;
-    leftPoints.forEach(pt => {
-        if (!pLeft) {
-            pLeft = pt;
-            return;
-        }
-
-        const isTarget = isUpper ? (pt.y > pLeft.y) : (pt.y < pLeft.y);
-        const isTie = Math.abs(pt.y - pLeft.y) < 1e-4;
-
-        if (isTarget) {
-            pLeft = pt;
-        } else if (isTie) {
-            // 좌측 영역 tie-breaker: 가장 작은 x (leftmost)
-            if (pt.x < pLeft.x) {
-                pLeft = pt;
+            let vx, vy;
+            if (Math.abs(covXY) > 1e-9) {
+                vx = covXY;
+                vy = lambda1 - covXX;
+            } else if (covXX >= covYY) {
+                vx = 1; vy = 0;
+            } else {
+                vx = 0; vy = 1;
             }
+
+            angle = Math.atan2(vy, vx);
+            if (angle > Math.PI / 2) angle -= Math.PI;
+            else if (angle < -Math.PI / 2) angle += Math.PI;
         }
+    }
+
+    // For the on-canvas overlay line, project every centroid onto the PCA axis and use the
+    // extreme projections as the line's two endpoints - purely visual, doesn't affect the
+    // center/angle used everywhere else
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    let minProj = 0, maxProj = 0;
+    centroids.forEach(c => {
+        const proj = (c.x - meanX) * cosA + (c.y - meanY) * sinA;
+        if (proj < minProj) minProj = proj;
+        if (proj > maxProj) maxProj = proj;
     });
-
-    let pRight = null;
-    rightPoints.forEach(pt => {
-        if (!pRight) {
-            pRight = pt;
-            return;
-        }
-
-        const isTarget = isUpper ? (pt.y > pRight.y) : (pt.y < pRight.y);
-        const isTie = Math.abs(pt.y - pRight.y) < 1e-4;
-
-        if (isTarget) {
-            pRight = pt;
-        } else if (isTie) {
-            // 우측 영역 tie-breaker: 가장 큰 x (rightmost)
-            if (pt.x > pRight.x) {
-                pRight = pt;
-            }
-        }
-    });
-
-    if (!pLeft || !pRight) return null;
-
-    const centerX = (pLeft.x + pRight.x) / 2;
-    const centerY = (pLeft.y + pRight.y) / 2;
-    const angle = Math.atan2(pRight.y - pLeft.y, pRight.x - pLeft.x);
+    const pLeft = { x: meanX + minProj * cosA, y: meanY + minProj * sinA };
+    const pRight = { x: meanX + maxProj * cosA, y: meanY + maxProj * sinA };
 
     return {
         pLeft,
         pRight,
-        center: { x: centerX, y: centerY },
-        angle: angle
+        center: { x: meanX, y: meanY },
+        angle
     };
 };
 
@@ -90,66 +93,7 @@ const rotateToPcaFrame = (x, y, pca) => {
     };
 };
 
-// True PCA over a set of tooth centroids: mean position + principal-axis angle from an
-// eigen-decomposition of the centroid covariance matrix. This is the exact algorithm
-// functions/features/theta.py's calculate_pca_rotation() uses to build the ResNet Tooth
-// model's training CSVs. It is NOT the same as calculatePCARotation() above (which picks two
-// extreme polygon points for the on-canvas overlay/arch-order heuristic) - that approximation
-// diverges from the true centroid PCA, especially with atypical tooth counts/arrangements, so
-// the tooth model's meta features must be computed with this exact transform instead or they
-// land outside the training distribution.
-const calculateCentroidPCA = (centroids) => {
-    const n = centroids.length;
-    if (n === 0) return null;
-    if (n === 1) return { center: { x: centroids[0].x, y: centroids[0].y }, angle: 0 };
-
-    let meanX = 0, meanY = 0;
-    centroids.forEach(c => { meanX += c.x; meanY += c.y; });
-    meanX /= n;
-    meanY /= n;
-
-    let sxx = 0, syy = 0, sxy = 0;
-    centroids.forEach(c => {
-        const dx = c.x - meanX;
-        const dy = c.y - meanY;
-        sxx += dx * dx;
-        syy += dy * dy;
-        sxy += dx * dy;
-    });
-    const denom = n - 1;
-    const covXX = sxx / denom;
-    const covYY = syy / denom;
-    const covXY = sxy / denom;
-
-    let angle = 0;
-    if (Math.abs(covXX) > 1e-9 || Math.abs(covYY) > 1e-9 || Math.abs(covXY) > 1e-9) {
-        // Eigen-decomposition of the symmetric 2x2 matrix [[covXX, covXY], [covXY, covYY]] -
-        // take the eigenvector for the larger eigenvalue (principal axis), matching
-        // np.linalg.eigh + descending sort + evecs[:, 0] in the Python pipeline
-        const trace = covXX + covYY;
-        const det = covXX * covYY - covXY * covXY;
-        const disc = Math.sqrt(Math.max(0, trace * trace - 4 * det));
-        const lambda1 = (trace + disc) / 2;
-
-        let vx, vy;
-        if (Math.abs(covXY) > 1e-9) {
-            vx = covXY;
-            vy = lambda1 - covXX;
-        } else if (covXX >= covYY) {
-            vx = 1; vy = 0;
-        } else {
-            vx = 0; vy = 1;
-        }
-
-        angle = Math.atan2(vy, vx);
-        if (angle > Math.PI / 2) angle -= Math.PI;
-        else if (angle < -Math.PI / 2) angle += Math.PI;
-    }
-
-    return { center: { x: meanX, y: meanY }, angle };
-};
-
-// The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the true PCA
+// The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the PCA
 // centerline a tooth sits on - unlike slot-based lookup, this works even when the tooth count
 // doesn't reconstruct to 12, so it's used for the Holding-state FDI badges (ResNet fallback)
 const computeQuadrantTens = (rotatedX, isUpper) => {
@@ -160,20 +104,19 @@ const computeQuadrantTens = (rotatedX, isUpper) => {
 
 // Computes the same normalized [x1, y1, x2, y2, theta] independent variables the ResNet Tooth
 // model was trained on (see functions/features/coords.py + theta.py) from a live prediction's
-// box + polygon. `centroidPca` MUST be the true centroid PCA from calculateCentroidPCA() (not
-// the overlay heuristic from calculatePCARotation()) or these values won't match training.
-// Mirroring is decided purely by which side of the PCA centerline the tooth's centroid falls
-// on (positive rotated-x = the mirrored FDI quadrant), matching the rule used to build the
-// training CSVs - so this works without knowing the tooth's FDI number up front.
-const computeToothMeta = (pred, centroidPca) => {
+// box + polygon, using the shared PCA from calculatePCARotation(). Mirroring is decided purely
+// by which side of the PCA centerline the tooth's centroid falls on (positive rotated-x = the
+// mirrored FDI quadrant), matching the rule used to build the training CSVs - so this works
+// without knowing the tooth's FDI number up front.
+const computeToothMeta = (pred, pca) => {
     const centroid = computeCentroid(pred.polygon);
-    const { tx, ty } = rotateToPcaFrame(centroid.x, centroid.y, centroidPca);
+    const { tx, ty } = rotateToPcaFrame(centroid.x, centroid.y, pca);
     const mirror = tx >= 0;
 
-    let x1_c = pred.box[0] - centroidPca.center.x;
-    let y1_c = pred.box[1] - centroidPca.center.y;
-    let x2_c = pred.box[2] - centroidPca.center.x;
-    let y2_c = pred.box[3] - centroidPca.center.y;
+    let x1_c = pred.box[0] - pca.center.x;
+    let y1_c = pred.box[1] - pca.center.y;
+    let x2_c = pred.box[2] - pca.center.x;
+    let y2_c = pred.box[3] - pca.center.y;
 
     if (mirror) {
         const x1_new = -x1_c;

@@ -495,12 +495,11 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
     }
 
     // Holding: the 12-slot layout can't be trusted. Fall back to the ResNet Tooth model - it
-    // predicts each tooth's FDI last digit directly from its crop + true-PCA meta features
-    // (see computeToothMeta), independent of slot count. The quadrant (tens digit) is derived
-    // geometrically from which side of the true PCA centerline the tooth sits on, so it
-    // doesn't depend on all 12 teeth being present either.
+    // predicts each tooth's FDI last digit directly from its crop + PCA meta features (see
+    // computeToothMeta), independent of slot count. The quadrant (tens digit) is derived
+    // geometrically from which side of the PCA centerline the tooth sits on, so it doesn't
+    // depend on all 12 teeth being present either.
     const jaw = isUpper ? 'upper' : 'lower';
-    const centroidPca = calculateCentroidPCA(vertices);
     const cached = file ? toothAnalysisCache[file.name] : null;
 
     if (cached && cached.status === 'done' && cached.order) {
@@ -513,7 +512,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
             if (pos === -1 || pos >= cached.rows.length) return;
 
             const row = cached.rows[pos];
-            const { tx } = rotateToPcaFrame(vertices[vertexIdx].x, vertices[vertexIdx].y, centroidPca);
+            const { tx } = rotateToPcaFrame(vertices[vertexIdx].x, vertices[vertexIdx].y, pca);
             const tens = computeQuadrantTens(tx, isUpper);
             const fdiNumber = tens * 10 + (row.classIdx + 1);
 
@@ -535,7 +534,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
     }
 
     if (file) {
-        runToothAnalysis(file, jaw, predictions, centroidPca);
+        runToothAnalysis(file, jaw, predictions, pca);
     }
 };
 
@@ -552,7 +551,7 @@ const redrawCanvas = () => {
 
     let pca = null;
     if (hasClassification && predictions) {
-        pca = calculatePCARotation(predictions, canvas.width, isUpper);
+        pca = calculatePCARotation(predictions);
     }
 
     ctx.save();
