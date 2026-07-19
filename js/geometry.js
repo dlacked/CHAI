@@ -104,19 +104,26 @@ const computeQuadrantTens = (rotatedX, isUpper) => {
 
 // Computes the same normalized [x1, y1, x2, y2, theta] independent variables the ResNet Tooth
 // model was trained on (see functions/features/coords.py + theta.py) from a live prediction's
-// box + polygon, using the shared PCA from calculatePCARotation(). Mirroring is decided purely
+// polygon, using the shared PCA from calculatePCARotation(). Mirroring is decided purely
 // by which side of the PCA centerline the tooth's centroid falls on (positive rotated-x = the
 // mirrored FDI quadrant), matching the rule used to build the training CSVs - so this works
 // without knowing the tooth's FDI number up front.
 const computeToothMeta = (pred, pca) => {
     const centroid = computeCentroid(pred.polygon);
-    const { tx, ty } = rotateToPcaFrame(centroid.x, centroid.y, pca);
-    const mirror = tx >= 0;
+    const { tx: ctx, ty: cty } = rotateToPcaFrame(centroid.x, centroid.y, pca);
+    const mirror = ctx >= 0;
 
-    let x1_c = pred.box[0] - pca.center.x;
-    let y1_c = pred.box[1] - pca.center.y;
-    let x2_c = pred.box[2] - pca.center.x;
-    let y2_c = pred.box[3] - pca.center.y;
+    // Rotate every polygon point into the PCA-aligned frame and re-fit an axis-aligned box
+    // from the rotated points - rotating only the box's two corners would turn a rectangle
+    // into a parallelogram, so this has to match coords.py's get_normalized_coords exactly.
+    let x1_c = Infinity, x2_c = -Infinity, y1_c = Infinity, y2_c = -Infinity;
+    pred.polygon.forEach(pt => {
+        const { tx, ty } = rotateToPcaFrame(pt[0], pt[1], pca);
+        if (tx < x1_c) x1_c = tx;
+        if (tx > x2_c) x2_c = tx;
+        if (ty < y1_c) y1_c = ty;
+        if (ty > y2_c) y2_c = ty;
+    });
 
     if (mirror) {
         const x1_new = -x1_c;
@@ -125,7 +132,7 @@ const computeToothMeta = (pred, pca) => {
         x2_c = Math.max(x1_new, x2_new);
     }
 
-    let theta = Math.atan2(ty, tx) / Math.PI;
+    let theta = Math.atan2(cty, ctx) / Math.PI;
     if (mirror) {
         theta = theta >= 0 ? 1.0 - theta : -1.0 - theta;
     }

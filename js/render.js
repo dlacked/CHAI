@@ -494,44 +494,20 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
         return;
     }
 
-    // Holding: the 12-slot layout can't be trusted. Fall back to the ResNet Tooth model - it
-    // predicts each tooth's FDI last digit directly from its crop + PCA meta features (see
-    // computeToothMeta), independent of slot count. The quadrant (tens digit) is derived
-    // geometrically from which side of the PCA centerline the tooth sits on, so it doesn't
-    // depend on all 12 teeth being present either.
+    // Holding: the 12-slot layout can't be trusted. The ResNet Tooth model fallback is
+    // temporarily disabled pending retraining on the corrected PCA meta features (see
+    // computeToothMeta) - always show the raw coordinates/theta/greedy-sequence debug labels
+    // instead of drawing (potentially stale) ResNet predictions. runToothAnalysis still runs
+    // in the background so results are cached and ready once the fallback is re-enabled.
     const jaw = isUpper ? 'upper' : 'lower';
-    const cached = file ? toothAnalysisCache[file.name] : null;
 
-    if (cached && cached.status === 'done' && cached.order) {
-        if (fdiStatus) {
-            fdiStatus.textContent = ' Holding (ResNet)';
-            fdiStatus.style.color = '#ff9800';
-        }
-        predictions.forEach((pred, vertexIdx) => {
-            const pos = cached.order.indexOf(vertexIdx);
-            if (pos === -1 || pos >= cached.rows.length) return;
-
-            const row = cached.rows[pos];
-            const { tx } = rotateToPcaFrame(vertices[vertexIdx].x, vertices[vertexIdx].y, pca);
-            const tens = computeQuadrantTens(tx, isUpper);
-            const fdiNumber = tens * 10 + (row.classIdx + 1);
-
-            const centerX = (pred.box[0] + pred.box[2]) / 2;
-            const centerY = (pred.box[1] + pred.box[3]) / 2;
-            drawFdiNumberBadge(centerX, centerY, String(fdiNumber));
-        });
-    } else {
-        const isError = cached && cached.status === 'error';
-        if (fdiStatus) {
-            fdiStatus.textContent = isError ? ' Holding (Model Error)' : ' Holding (Predicting...)';
-            fdiStatus.style.color = '#f44336';
-        }
-        // While the prediction request is in flight (or failed), draw the raw coordinates,
-        // theta, and greedy sequence numbers instead
-        predictions.forEach((pred, vertexIdx) => {
-            drawFdiDebugLabel(pred, vertexIdx, order, slots, fdiLabels, pca);
-        });
+    if (fdiStatus) {
+        fdiStatus.textContent = ' Holding (Debug)';
+        fdiStatus.style.color = '#f44336';
     }
+    predictions.forEach((pred, vertexIdx) => {
+        drawFdiDebugLabel(pred, vertexIdx, order, slots, fdiLabels, pca);
+    });
 
     if (file) {
         runToothAnalysis(file, jaw, predictions, pca);
