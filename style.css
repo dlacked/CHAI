@@ -310,6 +310,49 @@ body.light-mode .sidebar-item section:not(:has(input:disabled)):hover label {
     gap: 8px;
 }
 
+.analysis-complexity {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-top: 8px;
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.analysis-complexity:empty {
+    display: none;
+}
+
+.analysis-loss {
+    background: rgba(255, 51, 102, 0.08);
+    border: 1px solid rgba(255, 51, 102, 0.25);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-top: 8px;
+    font-size: 0.8em;
+    font-weight: 700;
+    color: #ff3366;
+}
+
+.analysis-loss:empty {
+    display: none;
+}
+
+.analysis-complexity-value {
+    font-weight: 700;
+    color: #39ff14;
+}
+
+.analysis-complexity-loading {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.analysis-complexity-error {
+    color: #f44336;
+    font-weight: 700;
+}
+
 .analysis-row {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.07);
@@ -341,6 +384,16 @@ body.light-mode .sidebar-item section:not(:has(input:disabled)):hover label {
 .analysis-prob-top {
     color: #39ff14;
     font-weight: 700;
+}
+
+body.light-mode .analysis-complexity {
+    background: rgba(0, 0, 0, 0.03);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.55);
+}
+
+body.light-mode .analysis-complexity-value {
+    color: #1b8a00;
 }
 
 body.light-mode .analysis-row {

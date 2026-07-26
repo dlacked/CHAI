@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm \"C:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\dataset\\\\split_metadata.py\")",
+      "Bash(rmdir \"C:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\dataset\")",
+      "Bash(python \"C:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\dataset\\\\split_metadata.py\")",
+      "Bash(python -c ' *)",
+      "Bash(rm \"C:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\dataset\\\\split_metadata.py\")",
+      "Bash(python \"C:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\functions\\\\split_metadata.py\")",
+      "Bash(python -m py_compile build_dataset.py dataset.py model.py train.py)",
+      "Bash(python -c \"import torch; print\\('cuda available:', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(rm -rf __pycache__)",
+      "Bash(python build_dataset.py)",
+      "Bash(python -m py_compile ViT/arch/train.py ViT/complexity/train.py YOLO/train.py)",
+      "Bash(node --check \"c:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\js\\\\main.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\js\\\\dom.js\")",
+      "Bash(tasklist)",
+      "Bash(grep -v '= \\\\`')",
+      "Bash(python functions/graph/complexity.py)"
+    ]
+  }
+}

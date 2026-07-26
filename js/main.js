@@ -26,31 +26,19 @@ const displayImage = (index) => {
     };
     img.src = currentObjectURL;
 
-    // 이미지 바뀔 때마다 classification 새로 수행 - segmentation은 classification이 끝나면
-    // onJawClassified()가 이어서 트리거하므로(항상 jawCb.checked일 때만 yoloCb.checked일 수
-    // 있음) 여기서 별도로 호출하지 않는다
-    if (jawCb.checked) {
-        classifyJawImage(file);
-    } else {
-        document.getElementById('jaw-classification-result').textContent = '';
-    }
-
-    if (!yoloCb.checked) {
-        const resultSpan = document.getElementById('yolo-segmentation-result');
-        if (resultSpan) resultSpan.textContent = '';
+    // 이미지 바뀔 때마다 segmentation 새로 수행 - jaw classification은 이제 세그멘테이션
+    // 결과로부터 redrawCanvas()가 즉시(동기적으로) 계산하므로 별도 호출이 필요 없다
+    if (yoloCb.checked) {
+        segmentImage(file);
     }
 };
 
-fileInput.addEventListener('change', () => {
-    const files = Array.from(fileInput.files || []);
+const handleSelectedFiles = (files, sourceInput) => {
     if (files.length === 0) {
         fileStatus.textContent = 'No directory selected';
-        jawCb.disabled = true;
-        jawCb.checked = false;
+        yoloCb.disabled = true;
+        yoloCb.checked = false;
         updateCheckboxStates();
-        document.getElementById('jaw-classification-result').textContent = '';
-        const resultSpan = document.getElementById('yolo-segmentation-result');
-        if (resultSpan) resultSpan.textContent = '';
         return;
     }
 
@@ -62,27 +50,32 @@ fileInput.addEventListener('change', () => {
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
     if (imageFiles.length === 0) {
-        fileStatus.textContent = 'No JPG, JPEG, or PNG images found in directory.';
-        fileInput.value = '';
+        fileStatus.textContent = 'No JPG, JPEG, or PNG images found in selection.';
+        sourceInput.value = '';
         currentSliceDisplay.textContent = 'Image: 0/0';
         fileNameDisplay.textContent = 'File: Not Opened';
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        jawCb.disabled = true;
-        jawCb.checked = false;
+        yoloCb.disabled = true;
+        yoloCb.checked = false;
         updateCheckboxStates();
-        document.getElementById('jaw-classification-result').textContent = '';
-        const resultSpan = document.getElementById('yolo-segmentation-result');
-        if (resultSpan) resultSpan.textContent = '';
         return;
     }
 
     currentImageIndex = 0;
     displayImage(currentImageIndex);
 
-    // Enable checkbox and trigger classification
-    jawCb.disabled = false;
-    classifyJawImage(imageFiles[0]);
+    // Enable checkbox and trigger segmentation
+    yoloCb.disabled = false;
+    segmentImage(imageFiles[0]);
+};
+
+fileInput.addEventListener('change', () => {
+    handleSelectedFiles(Array.from(fileInput.files || []), fileInput);
+});
+
+filesInput.addEventListener('change', () => {
+    handleSelectedFiles(Array.from(filesInput.files || []), filesInput);
 });
 
 const container = document.getElementById('2d-container');
@@ -124,14 +117,14 @@ const updateCheckboxStates = () => {
     // chain still lights up progressively as classification/segmentation complete.
     if (autoAllCb.checked) {
         if (imageFiles.length > 0) {
-            jawCb.checked = true;
-            jawCb.disabled = true;
+            yoloCb.checked = true;
+            yoloCb.disabled = true;
         }
 
-        yoloCb.checked = jawCb.checked;
-        yoloCb.disabled = true;
+        jawCb.checked = yoloCb.checked;
+        jawCb.disabled = true;
 
-        pcaCb.checked = yoloCb.checked;
+        pcaCb.checked = jawCb.checked;
         pcaCb.disabled = true;
 
         archPathCb.checked = pcaCb.checked;
@@ -140,69 +133,53 @@ const updateCheckboxStates = () => {
         gapCb.checked = archPathCb.checked;
         gapCb.disabled = true;
 
-        fdiCb.checked = gapCb.checked;
-        fdiCb.disabled = true;
-
-        const gapStatus = document.getElementById('gap-status');
-        if (gapStatus && !gapCb.checked) gapStatus.textContent = '';
-
-        const fdiStatus = document.getElementById('fdi-status');
-        if (fdiStatus && !fdiCb.checked) fdiStatus.textContent = '';
+        // Unlike the stages above, FDI vs Palmer is a display-mode *choice*, not a pipeline
+        // dependency, so Select All forces some notation on (defaulting to FDI the first time)
+        // but leaves both radios enabled - the user can still switch between them.
+        if (gapCb.checked && !fdiCb.checked && !palmerCb.checked) {
+            fdiCb.checked = true;
+        }
+        const notationOn = gapCb.checked;
+        fdiCb.disabled = !notationOn;
+        palmerCb.disabled = !notationOn;
+        if (!notationOn) {
+            fdiCb.checked = false;
+            palmerCb.checked = false;
+        }
 
         return;
     }
 
-    yoloCb.disabled = !jawCb.checked;
-    if (yoloCb.disabled) {
-        yoloCb.checked = false;
-        const resultSpan = document.getElementById('yolo-segmentation-result');
-        if (resultSpan) resultSpan.textContent = '';
+    jawCb.disabled = !yoloCb.checked;
+    if (jawCb.disabled) {
+        jawCb.checked = false;
     }
 
-    pcaCb.disabled = !yoloCb.checked;
+    pcaCb.disabled = !jawCb.checked;
     if (pcaCb.disabled) pcaCb.checked = false;
 
     // Arch Path is enabled when PCA is checked
     archPathCb.disabled = !pcaCb.checked;
     if (archPathCb.disabled) {
         archPathCb.checked = false;
-        const archPathStatus = document.getElementById('arch-path-status');
-        if (archPathStatus) archPathStatus.textContent = '';
     }
-
-    const file = imageFiles[currentImageIndex];
-    const predictions = file ? segmentationCache[file.name] : null;
-    const is12Teeth = predictions && predictions.length === 12;
 
     // Segment Gap is enabled when Arch Path is checked. With exactly 12 teeth detected there's
     // nothing to show (no possible gaps), but the checkbox itself stays checkable regardless.
     gapCb.disabled = !archPathCb.checked;
     if (gapCb.disabled) {
         gapCb.checked = false;
-        const gapStatus = document.getElementById('gap-status');
-        if (gapStatus) gapStatus.textContent = '';
-    } else {
-        const gapStatus = document.getElementById('gap-status');
-        if (gapStatus) {
-            if (gapCb.checked) {
-                gapStatus.textContent = ' Measuring...';
-                gapStatus.style.color = 'rgba(255, 255, 255, 0.5)';
-            } else if (is12Teeth) {
-                gapStatus.textContent = ' Deactivated';
-                gapStatus.style.color = '#f44336';
-            } else {
-                gapStatus.textContent = '';
-            }
-        }
     }
 
-    // FDI is enabled when Segment Gap is checked
-    fdiCb.disabled = !gapCb.checked;
-    if (fdiCb.disabled) {
+    // FDI/Palmer notation choice is enabled when Segment Gap is checked
+    const notationDisabled = !gapCb.checked;
+    fdiCb.disabled = notationDisabled;
+    palmerCb.disabled = notationDisabled;
+    if (notationDisabled) {
         fdiCb.checked = false;
-        const fdiStatus = document.getElementById('fdi-status');
-        if (fdiStatus) fdiStatus.textContent = '';
+        palmerCb.checked = false;
         clearAnalysisResult();
+        clearComplexityStatus();
     }
 };
 
@@ -215,26 +192,20 @@ autoAllCb.addEventListener('change', () => {
     }
 });
 
-jawCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    if (jawCb.checked && imageFiles.length > 0) {
-        classifyJawImage(imageFiles[currentImageIndex]);
-    } else if (!jawCb.checked) {
-        document.getElementById('jaw-classification-result').textContent = '';
-    }
-});
-
 yoloCb.addEventListener('change', () => {
     updateCheckboxStates();
-    const resultSpan = document.getElementById('yolo-segmentation-result');
     if (yoloCb.checked) {
         if (imageFiles.length > 0) {
             segmentImage(imageFiles[currentImageIndex]);
         }
     } else {
-        if (resultSpan) resultSpan.textContent = '';
         redrawCanvas();
     }
+});
+
+jawCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
 });
 
 pcaCb.addEventListener('change', () => {
@@ -257,6 +228,11 @@ fdiCb.addEventListener('change', () => {
     redrawCanvas();
 });
 
+palmerCb.addEventListener('change', () => {
+    updateCheckboxStates();
+    redrawCanvas();
+});
+
 // Initialize states
-jawCb.disabled = true;
+yoloCb.disabled = true;
 updateCheckboxStates();

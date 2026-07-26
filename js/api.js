@@ -1,73 +1,18 @@
-// Once jaw classification succeeds, check Jaw Classification and let updateCheckboxStates()
-// cascade the rest (Select All forces everything on; otherwise Tooth Segmentation only runs
-// if it's already checked, e.g. sticky from a previous image)
-const onJawClassified = (file) => {
-    jawCb.checked = true;
+// Once segmentation succeeds, check Tooth Segmentation and let updateCheckboxStates() cascade
+// the rest (Select All forces everything on; otherwise jaw classification/PCA/etc. need no
+// extra network call - they're all derived synchronously from the segmentation result inside
+// redrawCanvas() - so there's nothing further to trigger here, unlike the old jaw-classify-
+// first flow where this step had to kick off segmentImage() for the next stage)
+const onSegmented = (file) => {
+    yoloCb.checked = true;
     updateCheckboxStates();
-    if (yoloCb.checked) {
-        segmentImage(file);
-    }
-};
-
-const classifyJawImage = (file) => {
-    const resultSpan = document.getElementById('jaw-classification-result');
-
-    if (classificationCache[file.name]) {
-        const data = classificationCache[file.name];
-        const isUpper = data.class === 'upper';
-        resultSpan.textContent = isUpper ? ' Maxilla (Upper Jaw)' : ' Mandible (Lower Jaw)';
-        resultSpan.style.color = '#4caf50';
-        onJawClassified(file);
-        return;
-    }
-
-    resultSpan.textContent = ' Classifying...';
-    resultSpan.style.color = 'rgba(255, 255, 255, 0.5)';
-
-    const formData = new FormData();
-    formData.append('image', file);
-
-    fetch('/classify', {
-        method: 'POST',
-        body: formData
-    })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                classificationCache[file.name] = data;
-                const isUpper = data.class === 'upper';
-                resultSpan.textContent = isUpper ? ' Maxilla (Upper Jaw)' : ' Mandible (Lower Jaw)';
-                resultSpan.style.color = '#4caf50';
-
-                onJawClassified(file);
-            } else {
-                resultSpan.textContent = ' Error';
-                resultSpan.style.color = '#f44336';
-                console.error('Classification error:', data.error);
-            }
-        })
-        .catch(error => {
-            resultSpan.textContent = ' Offline';
-            resultSpan.style.color = '#f44336';
-            console.error('Server offline or network error:', error);
-        });
+    redrawCanvas();
 };
 
 const segmentImage = (file) => {
-    const resultSpan = document.getElementById('yolo-segmentation-result');
-
     if (segmentationCache[file.name]) {
-        if (resultSpan) {
-            resultSpan.textContent = ` Done (${segmentationCache[file.name].length})`;
-            resultSpan.style.color = '#4caf50';
-        }
-        redrawCanvas();
+        onSegmented(file);
         return;
-    }
-
-    if (resultSpan) {
-        resultSpan.textContent = ' Segmenting...';
-        resultSpan.style.color = 'rgba(255, 255, 255, 0.5)';
     }
 
     const formData = new FormData();
@@ -81,24 +26,12 @@ const segmentImage = (file) => {
         .then(data => {
             if (data.success) {
                 segmentationCache[file.name] = data.predictions;
-                if (resultSpan) {
-                    resultSpan.textContent = ` Done (${data.predictions.length})`;
-                    resultSpan.style.color = '#4caf50';
-                }
-                redrawCanvas();
+                onSegmented(file);
             } else {
-                if (resultSpan) {
-                    resultSpan.textContent = ' Error';
-                    resultSpan.style.color = '#f44336';
-                }
                 console.error('Segmentation error:', data.error);
             }
         })
         .catch(error => {
-            if (resultSpan) {
-                resultSpan.textContent = ' Offline';
-                resultSpan.style.color = '#f44336';
-            }
             console.error('Server offline or network error:', error);
         });
 };
@@ -120,6 +53,57 @@ const cropToothImage = (image, box, padding = 10) => {
     cropCanvas.height = h;
     cropCanvas.getContext('2d').drawImage(image, cx1, cy1, w, h, 0, 0, w, h);
     return cropCanvas.toDataURL('image/png');
+};
+
+const COMPLEXITY_LABELS = ['I', 'II', 'III'];
+
+// Renders the Complexity Class line into its own dedicated element (#complexity-result),
+// deliberately separate from #analysis-result-list - that list gets wiped by
+// clearAnalysisResult() whenever FDI reconstruction succeeds cleanly (see
+// drawFdiNumbers/render.js), but complexity is independent of whether that reconstruction
+// succeeded, so it must survive those clears.
+const renderComplexityStatus = (file) => {
+    const el = document.getElementById('complexity-result');
+    if (!el) return;
+
+    const complexity = file ? complexityCache[file.name] : null;
+    if (!complexity) {
+        el.innerHTML = '';
+        return;
+    }
+
+    if (complexity.status === 'loading') {
+        el.innerHTML = 'Complexity Class: <span class="analysis-complexity-loading">Predicting...</span>';
+        return;
+    }
+    if (complexity.status === 'error') {
+        el.innerHTML = 'Complexity Class: <span class="analysis-complexity-error">Error</span>';
+        return;
+    }
+    const label = COMPLEXITY_LABELS[complexity.classIdx] ?? '?';
+    el.innerHTML = `Complexity Class: <span class="analysis-complexity-value">${label}</span>`;
+};
+
+// Clears the Complexity Class line - called whenever there are no teeth/jaw to classify at
+// all (FDI unchecked, no predictions/PCA, or jaw classification missing).
+const clearComplexityStatus = () => {
+    const el = document.getElementById('complexity-result');
+    if (el) el.innerHTML = '';
+};
+
+// Renders the LOSS: line into its own dedicated element (#loss-result), listing the missing
+// teeth already formatted per the current notation (see formatToothLabel/render.js) -
+// missingLabels are display text, not raw FDI numbers. '#' prefix matches the FDI badge
+// convention and is omitted for Palmer, same as drawFdiNumberBadge.
+const renderLossStatus = (missingLabels, notation) => {
+    const el = document.getElementById('loss-result');
+    if (!el) return;
+    if (!missingLabels || missingLabels.length === 0) {
+        el.textContent = '';
+        return;
+    }
+    const prefix = notation === 'palmer' ? '' : '#';
+    el.textContent = `LOSS: ${missingLabels.map(n => `${prefix}${n}`).join(', ')}`;
 };
 
 // Renders the cached per-tooth probability vectors (left-to-right arch order) into the
@@ -144,13 +128,54 @@ const renderAnalysisResult = (file) => {
     }).join('');
 };
 
-// Clears the ANALYSIS RESULT panel - called whenever the current image isn't in a Holding
-// state (FDI unchecked, no classification yet, or the 12-slot reconstruction succeeded)
+// Clears the ANALYSIS RESULT per-tooth row list - called whenever the current image isn't in
+// a Holding state (FDI unchecked, no classification yet, or the 12-slot reconstruction
+// succeeded). Does NOT touch the Complexity Class line - see clearComplexityStatus.
 const clearAnalysisResult = () => {
     const statusEl = document.getElementById('analysis-status');
     const listEl = document.getElementById('analysis-result-list');
     if (statusEl) statusEl.textContent = '';
     if (listEl) listEl.innerHTML = '';
+};
+
+// Sends the arch's per-tooth geometry (no crop needed - ViT/complexity only takes
+// [x1,y1,x2,y2,theta] per tooth, see ViT/complexity/model.py) to the complexity classifier
+// and caches the predicted class (0=I, 1=II, 2=III). Runs independently of
+// runToothAnalysis/tooth_predict so the Complexity Class line can show up even while the
+// per-tooth FDI rows are still loading.
+const runComplexityAnalysis = (file, jaw, teeth) => {
+    const existing = complexityCache[file.name];
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        renderComplexityStatus(file);
+        return;
+    }
+
+    complexityCache[file.name] = { status: 'loading' };
+    renderComplexityStatus(file);
+
+    fetch('/complexity_predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            jaw,
+            teeth: teeth.map(t => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, theta: t.theta }))
+        })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                complexityCache[file.name] = { status: 'done', classIdx: data.class_idx, probs: data.probs };
+            } else {
+                complexityCache[file.name] = { status: 'error', error: data.error };
+                console.error('Complexity analysis error:', data.error);
+            }
+            renderComplexityStatus(file);
+        })
+        .catch(error => {
+            complexityCache[file.name] = { status: 'error', error: String(error) };
+            console.error('Server offline or network error:', error);
+            renderComplexityStatus(file);
+        });
 };
 
 // For every detected tooth, sends its crop + independent variables (x1, y1, x2, y2, theta -
@@ -202,9 +227,12 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
         .then(data => {
             if (data.success) {
                 // rows[i] corresponds to teeth[i], which was built from order[i] - so
-                // order[i] maps rows[i] back to its original prediction index
+                // order[i] maps rows[i] back to its original prediction index. `refined`
+                // reflects whether the arch transformer actually ran (see server.py
+                // /tooth_predict) - false when that jaw's ViT/arch model isn't trained yet,
+                // in which case rows are plain ResNet-only probabilities.
                 const rows = data.predictions.map(p => ({ probs: p.probs, classIdx: p.class_idx }));
-                toothAnalysisCache[file.name] = { status: 'done', rows, order };
+                toothAnalysisCache[file.name] = { status: 'done', rows, order, refined: !!data.refined };
                 if (statusEl) {
                     statusEl.textContent = ` Done (${rows.length})`;
                     statusEl.style.color = '#4caf50';

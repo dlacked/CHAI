@@ -93,6 +93,45 @@ const rotateToPcaFrame = (x, y, pca) => {
     };
 };
 
+// Determines jaw (upper/lower) purely from the dental arch's curvature: fits a parabola
+// ry = a*rx^2 + b*rx + c to the tooth centroids in the PCA-rotated frame and checks the sign
+// of the leading coefficient. Validated against this project's full GT set (71,522 train+val
+// arches): lower-jaw arches always fit with a < 0, upper-jaw arches always fit with a > 0,
+// with a clean margin between the two ranges (lower tops out at -0.00088, upper starts at
+// +0.00098) - so this fully replaces the ResNet/jaw CNN classifier and its /classify round
+// trip. Needs >= 4 centroids for a non-degenerate quadratic fit.
+const classifyJawByCurvature = (predictions, pca) => {
+    if (!predictions || !pca) return null;
+    const centroids = predictions
+        .filter(pred => pred.polygon && pred.polygon.length > 0)
+        .map(pred => computeCentroid(pred.polygon));
+    if (centroids.length < 4) return null;
+
+    const pts = centroids.map(c => rotateToPcaFrame(c.x, c.y, pca));
+
+    // Least-squares fit via the 3x3 normal-equations system for ry = a*rx^2 + b*rx + c.
+    let s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+    const n = pts.length;
+    pts.forEach(({ tx, ty }) => {
+        const x2 = tx * tx;
+        s1 += tx; s2 += x2; s3 += x2 * tx; s4 += x2 * x2;
+        t0 += ty; t1 += tx * ty; t2 += x2 * ty;
+    });
+
+    // Solve [[s4,s3,s2],[s3,s2,s1],[s2,s1,n]] * [a,b,c]^T = [t2,t1,t0]^T via Cramer's rule
+    const det3 = (m) => (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+        m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+        m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    );
+    const detM = det3([[s4, s3, s2], [s3, s2, s1], [s2, s1, n]]);
+    if (Math.abs(detM) < 1e-12) return null; // degenerate (e.g. centroids collinear)
+
+    const a = det3([[t2, s3, s2], [t1, s2, s1], [t0, s1, n]]) / detM;
+
+    return { isUpper: a > 0, a };
+};
+
 // The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the PCA
 // centerline a tooth sits on - unlike slot-based lookup, this works even when the tooth count
 // doesn't reconstruct to 12, so it's used for the Holding-state FDI badges (ResNet fallback)

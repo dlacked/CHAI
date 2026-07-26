@@ -44,7 +44,7 @@
             <div class="sidebar-section">
                 <div class="sidebar-item">
                     <section>
-                        <input type="checkbox" id="auto-all-checkbox">
+                        <input type="checkbox" id="auto-all-checkbox" checked>
                         <label for="auto-all-checkbox">Select All</label>
                     </section>
                 </div>
@@ -53,14 +53,12 @@
                 <div class="sidebar-label">2D VIEW</div>
                 <div class="sidebar-item">
                     <section>
-                        <input type="checkbox" id="jaw-classification-checkbox" disabled>
-                        <label for="jaw-classification-checkbox">Jaw Classification</label>
-                        <span id="jaw-classification-result" class="sidebar-status-inline"></span>
+                        <input type="checkbox" id="yolov8-seg-checkbox" disabled>
+                        <label for="yolov8-seg-checkbox">Tooth Segmentation</label>
                     </section>
                     <section>
-                        <input type="checkbox" id="yolov8-seg-checkbox">
-                        <label for="yolov8-seg-checkbox">Tooth Segmentation</label>
-                        <span id="yolo-segmentation-result" class="sidebar-status-inline"></span>
+                        <input type="checkbox" id="jaw-classification-checkbox">
+                        <label for="jaw-classification-checkbox">Jaw Classification</label>
                     </section>
                     <section>
                         <input type="checkbox" id="pca-checkbox">
@@ -69,21 +67,22 @@
                     <section>
                         <input type="checkbox" id="arch-path-checkbox">
                         <label for="arch-path-checkbox">Held-Karp DP</label>
-                        <span id="arch-path-status" class="sidebar-status-inline"></span>
                     </section>
                     <section>
                         <input type="checkbox" id="gap-checkbox">
                         <label for="gap-checkbox">Segment Gap</label>
-                        <span id="gap-status" class="sidebar-status-inline"></span>
                     </section>
                 </div>
             </div>
             <div class="sidebar-section">
                 <div class="sidebar-item">
                     <section>
-                        <input type="checkbox" id="fdi-checkbox">
+                        <input type="radio" id="fdi-checkbox" name="tooth-notation">
                         <label for="fdi-checkbox">FDI</label>
-                        <span id="fdi-status" class="sidebar-status-inline"></span>
+                    </section>
+                    <section>
+                        <input type="radio" id="palmer-checkbox" name="tooth-notation">
+                        <label for="palmer-checkbox">Palmer</label>
                     </section>
                 </div>
             </div>
@@ -92,6 +91,8 @@
                     <div class="sidebar-label">ANALYSIS RESULT</div>
                     <span id="analysis-status" class="sidebar-status-inline"></span>
                 </div>
+                <div id="complexity-result" class="analysis-complexity"></div>
+                <div id="loss-result" class="analysis-loss"></div>
                 <div id="analysis-result-list" class="analysis-result-list"></div>
             </div>
             <div class="sidebar-section sidebar-darkmode">

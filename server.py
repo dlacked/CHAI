@@ -1,5 +1,6 @@
 import io
 import base64
+import importlib.util
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -10,9 +11,6 @@ from flask_cors import CORS
 
 # Load config path if needed, or define locally for simplicity
 ROOT = Path(__file__).resolve().parent
-WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "model" / "jaw_classifier_model.pth"
-if not WEIGHTS_PATH.exists():
-    WEIGHTS_PATH = ROOT / "ResNet" / "jaw" / "model" / "best_classifier.pth"
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
@@ -31,28 +29,6 @@ def index():
 # Initialize device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
-# Define model structure (must match ResNet/jaw/train.py)
-print("Initializing ResNet18 model...")
-try:
-    from torchvision.models import resnet18, ResNet18_Weights
-    model = resnet18(weights=None)
-except (ImportError, AttributeError):
-    from torchvision.models import resnet18
-    model = resnet18()
-
-num_features = model.fc.in_features
-model.fc = nn.Linear(num_features, 2)
-
-# Load weights
-if WEIGHTS_PATH.exists():
-    print(f"Loading weights from {WEIGHTS_PATH}...")
-    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
-else:
-    print(f"WARNING: Weights file not found at {WEIGHTS_PATH}. Using untrained weights.")
-
-model.to(device)
-model.eval()
 
 # Load tooth classifier model(s)
 TOOTH_MODEL_DIR = ROOT / "ResNet" / "tooth" / "model"
@@ -108,6 +84,63 @@ for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
     else:
         print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
+# Load the arch-level Transformer that refines each tooth's ResNet prediction using self-attention
+# over the whole dental arch (see ViT/arch/model.py). Loaded by file path rather than sys.path +
+# import, so this doesn't depend on ViT/arch being an importable package or collide with any
+# other "model" module name.
+ARCH_MODEL_PATH = ROOT / "ViT" / "arch" / "model.py"
+ARCH_MODEL_DIR = ROOT / "ViT" / "arch" / "model"
+ARCH_MAX_TEETH = 12  # matches ViT/arch/build_dataset.py's MAX_TEETH_PER_ARCH / the model's pos_embed length
+
+arch_models = {}
+if ARCH_MODEL_PATH.exists():
+    spec = importlib.util.spec_from_file_location("vit_arch_model", str(ARCH_MODEL_PATH))
+    _vit_arch_model_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_vit_arch_model_module)
+    ArchToothTransformer = _vit_arch_model_module.ArchToothTransformer
+
+    for jaw_name in ("lower", "upper"):
+        weights_path = ARCH_MODEL_DIR / f"{jaw_name}_best.pth"
+        if weights_path.exists():
+            print(f"Loading arch transformer for {jaw_name} from {weights_path}...")
+            arch_model = ArchToothTransformer(num_classes=6)
+            arch_model.load_state_dict(torch.load(weights_path, map_location=device))
+            arch_model.to(device)
+            arch_model.eval()
+            arch_models[jaw_name] = arch_model
+        else:
+            print(f"Arch transformer weights not found for {jaw_name}: {weights_path} (falling back to ResNet-only for this jaw)")
+else:
+    print(f"ViT/arch/model.py not found at {ARCH_MODEL_PATH}; arch-level refinement disabled.")
+
+# Load the arch-level Transformer that predicts an arch's overall complexity class (I/II/III)
+# from per-tooth geometry alone - no image or ResNet features involved (see
+# ViT/complexity/model.py). Same dynamic-import approach as the ArchToothTransformer above.
+COMPLEXITY_MODEL_PATH = ROOT / "ViT" / "complexity" / "model.py"
+COMPLEXITY_MODEL_DIR = ROOT / "ViT" / "complexity" / "model"
+COMPLEXITY_MAX_TEETH = 12  # matches ViT/complexity/build_dataset.py's MAX_TEETH_PER_ARCH
+
+complexity_models = {}
+if COMPLEXITY_MODEL_PATH.exists():
+    spec = importlib.util.spec_from_file_location("vit_complexity_model", str(COMPLEXITY_MODEL_PATH))
+    _vit_complexity_model_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_vit_complexity_model_module)
+    ArchComplexityTransformer = _vit_complexity_model_module.ArchComplexityTransformer
+
+    for jaw_name in ("lower", "upper"):
+        weights_path = COMPLEXITY_MODEL_DIR / f"{jaw_name}_best.pth"
+        if weights_path.exists():
+            print(f"Loading complexity transformer for {jaw_name} from {weights_path}...")
+            complexity_model = ArchComplexityTransformer(num_classes=3)
+            complexity_model.load_state_dict(torch.load(weights_path, map_location=device))
+            complexity_model.to(device)
+            complexity_model.eval()
+            complexity_models[jaw_name] = complexity_model
+        else:
+            print(f"Complexity transformer weights not found for {jaw_name}: {weights_path}")
+else:
+    print(f"ViT/complexity/model.py not found at {COMPLEXITY_MODEL_PATH}; complexity classification disabled.")
+
 # Initialize YOLO segmentation model
 print("Initializing YOLO segmentation model...")
 try:
@@ -128,7 +161,7 @@ except Exception as e:
     print(f"Error loading YOLO model: {e}")
     yolo_model = None
 
-# Preprocessing transforms (must match ResNet/jaw/train.py validation transforms)
+# Preprocessing transforms (must match ResNet/tooth/train.py validation transforms)
 val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -137,44 +170,7 @@ val_transform = transforms.Compose([
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'healthy', 'model_loaded': WEIGHTS_PATH.exists()})
-
-@app.route('/classify', methods=['POST'])
-def classify():
-    if 'image' not in request.files:
-        return jsonify({'success': False, 'error': 'No image file uploaded'}), 400
-    
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'success': False, 'error': 'Empty file uploaded'}), 400
-
-    try:
-        # Load image
-        img_bytes = file.read()
-        image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        
-        # Apply transforms
-        input_tensor = val_transform(image).unsqueeze(0).to(device)
-        
-        # Run inference
-        with torch.no_grad():
-            outputs = model(input_tensor)
-            probabilities = torch.softmax(outputs, dim=1)[0]
-            confidence, predicted_idx = torch.max(probabilities, 0)
-            
-        classes = ["lower", "upper"]
-        result = classes[predicted_idx.item()]
-        score = confidence.item()
-        
-        print(f"Classified: {result} with confidence {score:.4f}")
-        return jsonify({
-            'success': True,
-            'class': result,
-            'confidence': score
-        })
-    except Exception as e:
-        print(f"Error during classification: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'status': 'healthy', 'model_loaded': yolo_model is not None and bool(tooth_models)})
 
 @app.route('/segment', methods=['POST'])
 def segment():
@@ -274,9 +270,39 @@ def tooth_predict():
         input_meta = torch.stack(input_meta).to(device)
 
         model = tooth_models[jaw]
+        arch_model = arch_models.get(jaw)
+        refined = False
         with torch.no_grad():
-            # Model's forward() already applies softmax, so outputs are class probabilities
-            outputs = model(input_images, input_meta)
+            # Run the ResNet backbone in stages (instead of model(img, meta), which only
+            # returns the final softmax) so the image embedding is available to feed the arch
+            # transformer - mirrors ViT/arch/build_dataset.py's cache-building forward pass.
+            img_features = model.resnet(input_images)
+            meta_features = model.meta_fc(input_meta)
+            logits = model.classifier(torch.cat((img_features, meta_features), dim=1))
+            outputs = torch.softmax(logits, dim=1)
+
+            if arch_model is not None:
+                # Teeth arrive already ordered left-to-right along the arch (js/api.js
+                # runToothAnalysis), matching the order the arch transformer was trained on.
+                # Only the first ARCH_MAX_TEETH get refined - the model's positional embedding
+                # doesn't support longer sequences (over-detection past 12 teeth is already a
+                # rare edge case in this pipeline).
+                seq_len = min(img_features.size(0), ARCH_MAX_TEETH)
+                geom = input_meta[:seq_len].unsqueeze(0)
+                img_vec = img_features[:seq_len].unsqueeze(0)
+                prob_vec = outputs[:seq_len].unsqueeze(0)
+                key_padding_mask = torch.zeros(1, seq_len, dtype=torch.bool, device=device)
+
+                refined_logits = arch_model(geom, img_vec, prob_vec, key_padding_mask)
+                refined_probs = torch.softmax(refined_logits, dim=-1)[0]
+
+                if seq_len < outputs.size(0):
+                    outputs = outputs.clone()
+                    outputs[:seq_len] = refined_probs
+                else:
+                    outputs = refined_probs
+                refined = True
+
             confidences, preds = torch.max(outputs, dim=1)
 
         predictions = []
@@ -288,9 +314,57 @@ def tooth_predict():
                 'confidence': float(confidences[i].item())
             })
 
-        return jsonify({'success': True, 'predictions': predictions})
+        return jsonify({'success': True, 'predictions': predictions, 'refined': refined})
     except Exception as e:
         print(f"Error during tooth prediction: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/complexity_predict', methods=['POST'])
+def complexity_predict():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+    jaw = payload.get('jaw')
+    teeth = payload.get('teeth')
+
+    if jaw not in complexity_models:
+        return jsonify({'success': False, 'error': f'Complexity model not available for jaw: {jaw}'}), 400
+    if not teeth or not isinstance(teeth, list):
+        return jsonify({'success': False, 'error': 'No teeth provided for prediction'}), 400
+
+    try:
+        # Teeth arrive already ordered left-to-right along the arch (js/api.js
+        # runToothAnalysis), matching the order the model was trained on. Only the first
+        # COMPLEXITY_MAX_TEETH get used - the model's positional embedding doesn't support
+        # longer sequences.
+        teeth = teeth[:COMPLEXITY_MAX_TEETH]
+        geom = torch.tensor([
+            [
+                float(tooth.get('x1', 0.0)),
+                float(tooth.get('y1', 0.0)),
+                float(tooth.get('x2', 0.0)),
+                float(tooth.get('y2', 0.0)),
+                float(tooth.get('theta', 0.0)),
+            ]
+            for tooth in teeth
+        ], dtype=torch.float32, device=device).unsqueeze(0)
+        key_padding_mask = torch.zeros(1, geom.size(1), dtype=torch.bool, device=device)
+
+        model = complexity_models[jaw]
+        with torch.no_grad():
+            logits = model(geom, key_padding_mask)
+            probs = torch.softmax(logits, dim=-1)[0]
+            class_idx = int(torch.argmax(probs).item())
+
+        return jsonify({
+            'success': True,
+            'class_idx': class_idx,
+            'complexity': class_idx + 1,
+            'probs': [float(p) for p in probs.cpu().tolist()]
+        })
+    except Exception as e:
+        print(f"Error during complexity prediction: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':

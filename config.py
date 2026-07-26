@@ -8,12 +8,8 @@ class PathConfig:
     PREDICT_DIR: Path = ROOT / "YOLO" / "predict" # 전체 파이프라인 예측 결과 저장 디렉터리
     
     YOLO_WEIGHTS: Path = ROOT / "YOLO" / "yolov8n-seg.pt" # 세그멘테이션 모델 기본 가중치
-    
-    RESNET_DIR: Path = ROOT / "ResNet" / "jaw" # 분류기 관련 디렉터리
-    RESNET_WEIGHTS: Path = RESNET_DIR / "model" / "jaw_classifier_model.pth" # 분류기 베스트 가중치 파일
-    RESNET_RUNS_DIR: Path = RESNET_DIR / "runs" # 분류기 결과 그래프 저장 디렉터리
 
     @classmethod
     def create_dir(cls): # 디렉터리 없는 경우 생성
-        for path in [cls.DATASET_DIR, cls.RUNS_DIR, cls.PREDICT_DIR, cls.RESNET_DIR, cls.RESNET_RUNS_DIR, cls.RESNET_WEIGHTS.parent]:
+        for path in [cls.DATASET_DIR, cls.RUNS_DIR, cls.PREDICT_DIR]:
             path.mkdir(parents=True, exist_ok=True)

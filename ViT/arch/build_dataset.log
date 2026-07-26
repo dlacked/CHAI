@@ -1,0 +1,25 @@
+C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\ViT\arch\build_dataset.py:114: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  model.load_state_dict(torch.load(weights_path, map_location=device))
+[ WARN:0@2909.754] global loadsave.cpp:278 cv::findDecoder imread_('C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\dataset\val\images\lower\lower_38750.png'): can't open/read file: check file path/integrity
+[ WARN:0@2933.608] global loadsave.cpp:278 cv::findDecoder imread_('C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\dataset\val\images\lower\lower_39108.png'): can't open/read file: check file path/integrity
+Using device: cuda:0
+
+Building lower/train arch sequences...
+Pretrained ResNet18 weights loaded.
+  36707 arches, 432005 teeth.
+  Saved to C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\ViT\arch\cache\lower_train.pt
+
+Building lower/val arch sequences...
+Pretrained ResNet18 weights loaded.
+  4435 arches, 52499 teeth.
+  Saved to C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\ViT\arch\cache\lower_val.pt
+
+Building upper/train arch sequences...
+Pretrained ResNet18 weights loaded.
+  27002 arches, 315976 teeth.
+  Saved to C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\ViT\arch\cache\upper_train.pt
+
+Building upper/val arch sequences...
+Pretrained ResNet18 weights loaded.
+  3378 arches, 39420 teeth.
+  Saved to C:\Users\chnyon\Desktop\lab\WORK\2026-1\CHAI\CHAI\ViT\arch\cache\upper_val.pt

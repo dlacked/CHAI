@@ -22,10 +22,10 @@ def train_yolo() -> None:
     model.train(
         data=str(data_yaml),
         epochs=1000,
-        patience=20,
+        patience=10,
         imgsz=640,
         rect=True,
-        batch=8,
+        batch=32,
         device=0,
         close_mosaic=0,
         project=str(PathConfig.RUNS_DIR),
