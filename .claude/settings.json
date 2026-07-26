@@ -16,7 +16,13 @@
       "Bash(node --check \"c:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\\\\js\\\\dom.js\")",
       "Bash(tasklist)",
       "Bash(grep -v '= \\\\`')",
-      "Bash(python functions/graph/complexity.py)"
+      "Bash(python functions/graph/complexity.py)",
+      "Bash(grep -E \"\\\\.\\(pt|pth\\)$\")",
+      "Bash(git ls-tree *)",
+      "Bash(git reset *)",
+      "Bash(git commit -m 'model performance result + complexity classifier, untrack pt/pth files *)",
+      "Bash(awk '$4 > 50000000 {print}')",
+      "Bash(git push *)"
     ]
   }
 }

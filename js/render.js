@@ -281,6 +281,7 @@ const drawSegmentGap = (predictions, pca, isUpper, isLower, hasClassification) =
     const fdiLabels = isLower
         ? [46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36]
         : [16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26];
+    const notation = palmerCb.checked ? 'palmer' : 'fdi';
 
     for (let i = 0; i < order.length - 1; i++) {
         const gap = computeGapNormWeight(predictions, order[i], order[i + 1], W_pca, H_pca, pca);
@@ -299,26 +300,28 @@ const drawSegmentGap = (predictions, pca, isUpper, isLower, hasClassification) =
         ctx.stroke();
         ctx.setLineDash([]); // Reset
 
-        // The missing tooth's FDI number sits in the slot right after the tooth before the gap
+        // The missing tooth's slot right after the tooth before the gap, formatted per the
+        // currently selected notation (FDI or Palmer - see formatToothLabel)
         const missingSlot = slots ? slots[order[i]] + 1 : -1;
         const missingLabel = missingSlot >= 0 && missingSlot < fdiLabels.length
-            ? String(fdiLabels[missingSlot])
+            ? formatToothLabel(fdiLabels[missingSlot], notation)
             : '?';
 
-        // Draw a three-line label at the middle of the edge: missing FDI number, "LOSS", and then the distance
+        // Draw a three-line label at the middle of the edge: missing tooth label, "LOSS", and then the distance
         const midX = (ptA[0] + ptB[0]) / 2;
         const midY = (ptA[1] + ptB[1]) / 2;
-        const hashText = '#';
+        const hashText = notation === 'palmer' ? '' : '#';
         const numText = missingLabel;
         const lossText = 'LOSS';
         const distText = `${gap.normWeight.toFixed(4)}`;
 
-        // '#' is sized the same as the FDI badge's '#' (16px), number stays large
+        // '#' is sized the same as the FDI badge's '#' (16px), number stays large - omitted
+        // for Palmer, same as drawFdiNumberBadge
         ctx.font = 'bold 28px sans-serif';
         const numWidth = ctx.measureText(numText).width;
         ctx.font = 'bold 16px sans-serif';
-        const hashWidth = ctx.measureText(hashText).width;
-        const hashSpacing = 2;
+        const hashWidth = hashText ? ctx.measureText(hashText).width : 0;
+        const hashSpacing = hashText ? 2 : 0;
         const valWidth = hashWidth + hashSpacing + numWidth;
         const valHeight = 28;
 
@@ -353,15 +356,18 @@ const drawSegmentGap = (predictions, pca, isUpper, isLower, hasClassification) =
         ctx.lineWidth = 1;
         ctx.stroke();
 
-        // Missing FDI number (top line, red) - small '#' + large number, vertically centered
+        // Missing tooth label (top line, red) - small '#' (FDI only) + large number/notation,
+        // vertically centered
         const valCenterY = valY + valHeight / 2;
         const valStartX = midX - valWidth / 2;
         ctx.fillStyle = '#ff3366';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
 
-        ctx.font = 'bold 16px sans-serif';
-        ctx.fillText(hashText, valStartX, valCenterY);
+        if (hashText) {
+            ctx.font = 'bold 16px sans-serif';
+            ctx.fillText(hashText, valStartX, valCenterY);
+        }
 
         ctx.font = 'bold 28px sans-serif';
         ctx.fillText(numText, valStartX + hashWidth + hashSpacing, valCenterY);
