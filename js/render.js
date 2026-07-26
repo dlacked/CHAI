@@ -104,6 +104,49 @@ const drawSegmentation = (predictions, fdiByIndex) => {
     });
 };
 
+// Determines each detected tooth's FDI tens digit (quadrant) in the Holding state, using the
+// actual sequence of predicted last digits rather than geometry alone. A full arch normally
+// has each last digit (1-6) appear twice - once per quadrant - so whichever arch-order
+// position hits a given last digit FIRST gets that jaw's first quadrant (4 lower / 1 upper),
+// and its second occurrence gets the second quadrant (3 lower / 2 upper). Only a last digit
+// that appears just once (no second occurrence to disambiguate against) falls back to the
+// pure geometric split (computeQuadrantTens).
+const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
+    const firstTens = isUpper ? 1 : 4;
+    const secondTens = isUpper ? 2 : 3;
+
+    // cached.rows is already in arch order (js/api.js runToothAnalysis: "rows[i] corresponds
+    // to teeth[i], which was built from order[i]"), so position i's last digit is rows[i].
+    const digitsInOrder = order.map((_, i) => {
+        const row = cached.rows[i];
+        return row ? row.classIdx + 1 : null;
+    });
+
+    const totalCount = {};
+    digitsInOrder.forEach(digit => {
+        if (digit !== null) totalCount[digit] = (totalCount[digit] || 0) + 1;
+    });
+
+    const seenSoFar = {};
+    const tensByVertexIdx = new Array(predictions.length).fill(null);
+    order.forEach((vertexIdx, i) => {
+        const digit = digitsInOrder[i];
+        if (digit === null) return;
+
+        seenSoFar[digit] = (seenSoFar[digit] || 0) + 1;
+
+        if (totalCount[digit] >= 2) {
+            tensByVertexIdx[vertexIdx] = seenSoFar[digit] === 1 ? firstTens : secondTens;
+        } else {
+            const centroid = computeCentroid(predictions[vertexIdx].polygon);
+            const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
+            tensByVertexIdx[vertexIdx] = computeQuadrantTens(tx, isUpper);
+        }
+    });
+
+    return tensByVertexIdx;
+};
+
 // Pure computation of each prediction's FDI number (parallel array, null where still unknown),
 // mirroring the branches in drawFdiNumbers (exact 12, reconstructed-to-12, Holding/refined) but
 // without any DOM writes or triggering the ResNet+ViT analysis call - used purely to color
@@ -146,15 +189,13 @@ const computeFdiByIndexCore = (predictions, pca, isUpper, isLower, hasClassifica
 
     const cached = file ? toothAnalysisCache[file.name] : null;
     if (cached && cached.status === 'done' && cached.refined) {
+        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, pca, isUpper);
         const result = new Array(predictions.length).fill(null);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
             const row = cached.rows[archSeq];
             if (!row) return;
-            const centroid = computeCentroid(pred.polygon);
-            const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
-            const tens = computeQuadrantTens(tx, isUpper);
-            result[vertexIdx] = tens * 10 + (row.classIdx + 1);
+            result[vertexIdx] = tensByVertexIdx[vertexIdx] * 10 + (row.classIdx + 1);
         });
         return result;
     }
@@ -473,15 +514,13 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
     const cached = file ? toothAnalysisCache[file.name] : null;
 
     if (cached && cached.status === 'done' && cached.refined) {
+        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, pca, isUpper);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
             const row = cached.rows[archSeq];
             if (!row) return;
 
-            const centroid = computeCentroid(pred.polygon);
-            const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
-            const tens = computeQuadrantTens(tx, isUpper);
-            const fdiNumber = tens * 10 + (row.classIdx + 1);
+            const fdiNumber = tensByVertexIdx[vertexIdx] * 10 + (row.classIdx + 1);
 
             const centerX = (pred.box[0] + pred.box[2]) / 2;
             const centerY = (pred.box[1] + pred.box[3]) / 2;

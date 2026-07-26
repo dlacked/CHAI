@@ -331,7 +331,7 @@ def evaluate_tooth_number():
         else:
             print(f"No ViT arch transformer for {jaw} - refined == ResNet-only.")
 
-        y_true, y_resnet, y_refined, y_fdi_number = [], [], [], []
+        y_true, y_resnet, y_refined, y_fdi_number, y_image_name = [], [], [], [], []
         with torch.no_grad():
             for seq, fdi_numbers in zip(sequences, fdi_number_lists):
                 target = seq["target"]
@@ -341,6 +341,7 @@ def evaluate_tooth_number():
 
                 y_true.extend(target.tolist())
                 y_fdi_number.extend(fdi_numbers)
+                y_image_name.extend([seq["image_name"]] * len(target))
                 y_resnet.extend(torch.argmax(prob_vec, dim=1).tolist())
 
                 if arch_model is not None:
@@ -358,7 +359,7 @@ def evaluate_tooth_number():
 
         per_jaw[jaw] = {
             "y_true": y_true, "y_resnet": y_resnet, "y_refined": y_refined,
-            "y_fdi_number": y_fdi_number,
+            "y_fdi_number": y_fdi_number, "y_image_name": y_image_name,
             "n_arches": len(sequences), "n_teeth": len(y_true),
             "has_arch_model": arch_model is not None,
         }
@@ -479,7 +480,7 @@ def main():
         "metrics": number_metrics,
         "metrics_by_number": number_metrics_by_number,
         "per_jaw": {
-            jaw: {k: v for k, v in d.items() if k not in ("y_true", "y_resnet", "y_refined", "y_fdi_number")}
+            jaw: {k: v for k, v in d.items() if k not in ("y_true", "y_resnet", "y_refined", "y_fdi_number", "y_image_name")}
             for jaw, d in per_jaw.items()
         },
     }

@@ -22,7 +22,8 @@
       "Bash(git reset *)",
       "Bash(git commit -m 'model performance result + complexity classifier, untrack pt/pth files *)",
       "Bash(awk '$4 > 50000000 {print}')",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(python -m py_compile functions/graph/complexity.py functions/graph/evaluate_test_performance.py)"
     ]
   }
 }

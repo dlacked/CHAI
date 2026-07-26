@@ -11,6 +11,7 @@ Usage:
 """
 import json
 import importlib.util
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -36,6 +37,7 @@ DISPLAY_LABELS = ["1", "2", "3"]  # matches ViT/complexity/train.py's DISPLAY_LA
 # dataviz reference palette - matches functions/graph/evaluate_test_performance.py
 BLUE = "#2a78d6"
 ORANGE = "#eb6834"
+TEAL = "#1f9d8a"
 INK = "#0b0b0b"
 MUTED = "#898781"
 GRID = "#e1e0d9"
@@ -159,6 +161,84 @@ def plot_accuracy_by_jaw(per_jaw_metrics, title, out_path):
     plt.close()
 
 
+def evaluate_fdi_accuracy_by_complexity():
+    """Groups the ResNet+ViT pipeline's per-tooth FDI-number accuracy (test set) by each
+    arch's ground-truth complexity class, so accuracy can be read as a function of case
+    difficulty rather than just pooled across the whole test set. Reuses
+    evaluate_test_performance.evaluate_tooth_number() (per-tooth predictions, attributed back
+    to image_name) and ViT/complexity/build_dataset.load_complexity_labels (arch -> complexity
+    ground truth) instead of reimplementing either pipeline."""
+    eval_module = load_module("evaluate_test_performance_eval", GRAPH_DIR / "evaluate_test_performance.py")
+    complexity_build = load_module("vit_complexity_build_eval", COMPLEXITY_DIR / "build_dataset.py")
+
+    dataset_dir = PROJECT_ROOT.parent / "dataset"
+    per_jaw = eval_module.evaluate_tooth_number()
+
+    per_jaw_by_complexity = {}
+    all_true, all_pred, all_complexity = [], [], []
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        complexity_by_image = complexity_build.load_complexity_labels(dataset_dir, "test")
+
+        buckets = defaultdict(lambda: {"true": [], "pred": []})
+        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_refined"], d["y_image_name"]):
+            complexity = complexity_by_image.get(image_name)
+            if complexity is None:
+                continue
+            buckets[complexity]["true"].append(true_digit)
+            buckets[complexity]["pred"].append(pred_digit)
+            all_true.append(true_digit)
+            all_pred.append(pred_digit)
+            all_complexity.append(complexity)
+
+        per_jaw_by_complexity[jaw] = {
+            c: accuracy_score(b["true"], b["pred"]) for c, b in sorted(buckets.items())
+        }
+
+    pooled_buckets = defaultdict(lambda: {"true": [], "pred": []})
+    for t, p, c in zip(all_true, all_pred, all_complexity):
+        pooled_buckets[c]["true"].append(t)
+        pooled_buckets[c]["pred"].append(p)
+    per_jaw_by_complexity["pooled"] = {
+        c: accuracy_score(b["true"], b["pred"]) for c, b in sorted(pooled_buckets.items())
+    }
+
+    return per_jaw_by_complexity
+
+
+def plot_fdi_accuracy_by_complexity(results, title, out_path):
+    """Grouped bar chart: one group per complexity class (1/2/3), one bar per jaw + pooled
+    within each group - shows whether FDI tooth-number accuracy degrades on harder cases."""
+    series_order = [j for j in ("lower", "upper", "pooled") if results.get(j)]
+    series_colors = {"lower": BLUE, "upper": TEAL, "pooled": ORANGE}
+    complexity_levels = sorted({c for j in series_order for c in results[j].keys()})
+
+    x = list(range(len(complexity_levels)))
+    n_series = len(series_order)
+    bar_width = 0.8 / max(n_series, 1)
+
+    fig, ax = plt.subplots(figsize=(8, 5), facecolor=SURFACE)
+    for i, series in enumerate(series_order):
+        offsets = [xi + (i - (n_series - 1) / 2) * bar_width for xi in x]
+        values = [results[series].get(c, 0.0) for c in complexity_levels]
+        bars = ax.bar(offsets, values, width=bar_width, color=series_colors[series],
+                       label=series.capitalize(), zorder=3)
+        annotate_bars(ax, bars)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(c) for c in complexity_levels])
+    ax.set_ylim(0, 1.08)
+    ax.set_xlabel("Complexity Class", color=INK)
+    ax.set_ylabel("FDI Tooth-Number Accuracy", color=INK)
+    ax.set_title(title, color=INK)
+    ax.legend(frameon=False, labelcolor=INK)
+    style_axes(ax)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=SURFACE)
+    plt.close()
+
+
 def main():
     model_module = load_module("vit_complexity_model_eval", COMPLEXITY_DIR / "model.py")
     dataset_module = load_module("vit_complexity_dataset_eval", COMPLEXITY_DIR / "dataset.py")
@@ -219,6 +299,20 @@ def main():
             "Complexity Accuracy by Jaw (Test Set)",
             RESULTS_DIR / "complexity_accuracy_by_jaw.png"
         )
+
+    print("\n" + "=" * 70)
+    print("FDI tooth-number accuracy by complexity class (ResNet+ViT, Test Set)")
+    print("=" * 70)
+    fdi_by_complexity = evaluate_fdi_accuracy_by_complexity()
+    for series, accs in fdi_by_complexity.items():
+        breakdown = ", ".join(f"complexity {c}: {a:.4f}" for c, a in sorted(accs.items()))
+        print(f"{series}: {breakdown}")
+    plot_fdi_accuracy_by_complexity(
+        fdi_by_complexity,
+        "FDI Tooth-Number Accuracy by Complexity Class (Test Set)",
+        RESULTS_DIR / "complexity_fdi_accuracy_by_complexity.png"
+    )
+    summary["fdi_accuracy_by_complexity"] = fdi_by_complexity
 
     with open(RESULTS_DIR / "complexity_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
