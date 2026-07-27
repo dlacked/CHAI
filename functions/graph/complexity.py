@@ -1,7 +1,7 @@
 """
-Evaluates the ViT/complexity arch-level complexity classifier (class I/II/III, predicted from
-per-tooth geometry alone - see ViT/complexity/model.py) on the held-out test split
-(dataset/test/, never touched by training or validation).
+Evaluates the ViT/complexity arch-level Angle's Classification model (Class I/II/III,
+predicted from per-tooth geometry alone - see ViT/complexity/model.py) on the held-out test
+split (dataset/test/, never touched by training or validation).
 
 Reuses ViT/complexity/{model,dataset}.py and the {jaw}_test.pt caches already built by
 ViT/complexity/build_dataset.py instead of reimplementing the data pipeline.
@@ -14,14 +14,16 @@ import importlib.util
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 import torch
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
+    accuracy_score, precision_score, recall_score, f1_score, average_precision_score,
     confusion_matrix, ConfusionMatrixDisplay,
 )
+from sklearn.preprocessing import label_binarize
 
 GRAPH_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = GRAPH_DIR.parent.parent  # .../CHAI/CHAI
@@ -32,16 +34,30 @@ COMPLEXITY_DIR = PROJECT_ROOT / "ViT" / "complexity"
 CACHE_DIR = COMPLEXITY_DIR / "cache"
 MODEL_DIR = COMPLEXITY_DIR / "model"
 
-DISPLAY_LABELS = ["1", "2", "3"]  # matches ViT/complexity/train.py's DISPLAY_LABELS
+DISPLAY_LABELS = ["Class I", "Class II", "Class III"]  # Angle's Classification display text
 
-# dataviz reference palette - matches functions/graph/evaluate_test_performance.py
+# Raw complexity values from metadata.json (1/2/3) -> Angle's Classification display text -
+# used wherever a chart needs to label a bucket keyed by that raw value (not a 0-indexed
+# model class index, which DISPLAY_LABELS above covers).
+ANGLE_CLASS_LABELS = {1: "Class I", 2: "Class II", 3: "Class III"}
+
+# Fixed display order/labels for every metric key compute_metrics() can produce - charts only
+# show whichever of these are actually present in a given metrics dict.
+METRIC_DISPLAY = [("accuracy", "Accuracy"), ("precision", "Precision"),
+                   ("recall", "Recall"), ("f1", "F1"), ("map", "mAP")]
+
+# dataviz reference palette - matches functions/graph/tooth.py
 BLUE = "#2a78d6"
 ORANGE = "#eb6834"
 TEAL = "#1f9d8a"
+PURPLE = "#8858c8"
+PINK = "#d6538a"
 INK = "#0b0b0b"
 MUTED = "#898781"
 GRID = "#e1e0d9"
 SURFACE = "#fcfcfb"
+METRIC_COLORS = {"accuracy": BLUE, "precision": ORANGE, "recall": TEAL, "f1": PURPLE, "map": PINK}
+SERIES_COLORS = {"lower": BLUE, "upper": TEAL, "pooled": ORANGE}
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -65,12 +81,12 @@ def style_axes(ax):
     ax.set_axisbelow(True)
 
 
-def annotate_bars(ax, bars):
+def annotate_bars(ax, bars, fontsize=9):
     for rect in bars:
         h = rect.get_height()
         ax.annotate(f"{h:.3f}", xy=(rect.get_x() + rect.get_width() / 2, h),
                     xytext=(0, 3), textcoords="offset points",
-                    ha="center", va="bottom", fontsize=9, color=INK)
+                    ha="center", va="bottom", fontsize=fontsize, color=INK)
 
 
 def evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset):
@@ -91,34 +107,55 @@ def evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset):
     model.to(device)
     model.eval()
 
-    y_true, y_pred = [], []
+    y_true, y_pred, y_proba = [], [], []
     with torch.no_grad():
         for i in range(len(dataset)):
             geom, complexity = dataset[i]
             geom = geom.unsqueeze(0).to(device)
             key_padding_mask = torch.zeros(1, geom.size(1), dtype=torch.bool, device=device)
             logits = model(geom, key_padding_mask)
-            y_pred.append(int(torch.argmax(logits, dim=1).item()))
+            probs = torch.softmax(logits, dim=1)[0]
+            y_pred.append(int(torch.argmax(probs).item()))
             y_true.append(int(complexity.item()))
+            y_proba.append(probs.cpu().tolist())
 
-    return {"y_true": y_true, "y_pred": y_pred, "n": len(y_true)}
+    return {"y_true": y_true, "y_pred": y_pred, "y_proba": y_proba, "n": len(y_true)}
 
 
-def compute_metrics(y_true, y_pred):
-    return {
+def compute_metrics(y_true, y_pred, y_proba=None, num_classes=None):
+    """Accuracy/Precision/Recall/F1 (macro), plus mAP (macro-averaged per-class average
+    precision) when class probability scores are given - mAP needs ranked scores, not just
+    the hard argmax prediction, so it's only computed for the Angle's Classification model
+    itself. The downstream ResNet+ViT tooth-number pipeline (tooth.py) only exposes hard
+    predictions, so buckets derived from it get Accuracy/Precision/Recall/F1 only."""
+    metrics = {
         "accuracy": accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, average="macro", zero_division=0),
         "recall": recall_score(y_true, y_pred, average="macro", zero_division=0),
         "f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
     }
+    if y_proba is not None:
+        classes = list(range(num_classes))
+        y_true_onehot = label_binarize(y_true, classes=classes)
+        if y_true_onehot.shape[1] == 1:
+            # label_binarize collapses to one column when only one class is present in
+            # y_true - pad back out to one column per class so it lines up with y_proba.
+            only_class = y_true[0]
+            padded = np.zeros((len(y_true), len(classes)))
+            padded[:, classes.index(only_class)] = 1
+            y_true_onehot = padded
+        metrics["map"] = average_precision_score(y_true_onehot, y_proba, average="macro")
+    return metrics
 
 
 def plot_metric_bars(metrics, title, out_path):
-    labels = ["Accuracy", "Precision", "Recall", "F1"]
-    values = [metrics["accuracy"], metrics["precision"], metrics["recall"], metrics["f1"]]
+    present = [(key, label) for key, label in METRIC_DISPLAY if key in metrics]
+    labels = [label for _, label in present]
+    values = [metrics[key] for key, _ in present]
+    colors = [METRIC_COLORS[key] for key, _ in present]
 
-    fig, ax = plt.subplots(figsize=(6, 5), facecolor=SURFACE)
-    bars = ax.bar(labels, values, color=BLUE, width=0.5, zorder=3)
+    fig, ax = plt.subplots(figsize=(7, 5), facecolor=SURFACE)
+    bars = ax.bar(labels, values, color=colors, width=0.5, zorder=3)
     annotate_bars(ax, bars)
 
     ax.set_ylim(0, 1.08)
@@ -141,102 +178,226 @@ def plot_confusion(y_true, y_pred, title, out_path):
     plt.close()
 
 
-def plot_accuracy_by_jaw(per_jaw_metrics, title, out_path):
-    """Grouped bar chart of accuracy per jaw + pooled, so lower vs upper performance is visible
-    at a glance - pooled gets the accent color to set it apart from the two per-jaw bars."""
+def plot_metrics_by_jaw(per_jaw_metrics, title, out_path):
+    """Grouped bar chart: one group per jaw (+ pooled), one bar per metric within each group -
+    shows every metric present (Accuracy/Precision/Recall/F1/mAP) per jaw side by side, not
+    just accuracy. Degrades gracefully to a single accuracy bar per jaw when that's the only
+    metric supplied."""
     jaws = list(per_jaw_metrics.keys())
-    accs = [per_jaw_metrics[j]["accuracy"] for j in jaws]
-    colors = [ORANGE if j == "pooled" else BLUE for j in jaws]
+    present = [(key, label) for key, label in METRIC_DISPLAY if all(key in per_jaw_metrics[j] for j in jaws)]
 
-    fig, ax = plt.subplots(figsize=(6, 5), facecolor=SURFACE)
-    bars = ax.bar([j.capitalize() for j in jaws], accs, color=colors, width=0.5, zorder=3)
-    annotate_bars(ax, bars)
-
-    ax.set_ylim(0, 1.08)
-    ax.set_ylabel("Accuracy", color=INK)
-    ax.set_title(title, color=INK)
-    style_axes(ax)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150, facecolor=SURFACE)
-    plt.close()
-
-
-def evaluate_fdi_accuracy_by_complexity():
-    """Groups the ResNet+ViT pipeline's per-tooth FDI-number accuracy (test set) by each
-    arch's ground-truth complexity class, so accuracy can be read as a function of case
-    difficulty rather than just pooled across the whole test set. Reuses
-    evaluate_test_performance.evaluate_tooth_number() (per-tooth predictions, attributed back
-    to image_name) and ViT/complexity/build_dataset.load_complexity_labels (arch -> complexity
-    ground truth) instead of reimplementing either pipeline."""
-    eval_module = load_module("evaluate_test_performance_eval", GRAPH_DIR / "evaluate_test_performance.py")
-    complexity_build = load_module("vit_complexity_build_eval", COMPLEXITY_DIR / "build_dataset.py")
-
-    dataset_dir = PROJECT_ROOT.parent / "dataset"
-    per_jaw = eval_module.evaluate_tooth_number()
-
-    per_jaw_by_complexity = {}
-    all_true, all_pred, all_complexity = [], [], []
-
-    for jaw in ("lower", "upper"):
-        d = per_jaw[jaw]
-        complexity_by_image = complexity_build.load_complexity_labels(dataset_dir, "test")
-
-        buckets = defaultdict(lambda: {"true": [], "pred": []})
-        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_refined"], d["y_image_name"]):
-            complexity = complexity_by_image.get(image_name)
-            if complexity is None:
-                continue
-            buckets[complexity]["true"].append(true_digit)
-            buckets[complexity]["pred"].append(pred_digit)
-            all_true.append(true_digit)
-            all_pred.append(pred_digit)
-            all_complexity.append(complexity)
-
-        per_jaw_by_complexity[jaw] = {
-            c: accuracy_score(b["true"], b["pred"]) for c, b in sorted(buckets.items())
-        }
-
-    pooled_buckets = defaultdict(lambda: {"true": [], "pred": []})
-    for t, p, c in zip(all_true, all_pred, all_complexity):
-        pooled_buckets[c]["true"].append(t)
-        pooled_buckets[c]["pred"].append(p)
-    per_jaw_by_complexity["pooled"] = {
-        c: accuracy_score(b["true"], b["pred"]) for c, b in sorted(pooled_buckets.items())
-    }
-
-    return per_jaw_by_complexity
-
-
-def plot_fdi_accuracy_by_complexity(results, title, out_path):
-    """Grouped bar chart: one group per complexity class (1/2/3), one bar per jaw + pooled
-    within each group - shows whether FDI tooth-number accuracy degrades on harder cases."""
-    series_order = [j for j in ("lower", "upper", "pooled") if results.get(j)]
-    series_colors = {"lower": BLUE, "upper": TEAL, "pooled": ORANGE}
-    complexity_levels = sorted({c for j in series_order for c in results[j].keys()})
-
-    x = list(range(len(complexity_levels)))
-    n_series = len(series_order)
+    x = list(range(len(jaws)))
+    n_series = len(present)
     bar_width = 0.8 / max(n_series, 1)
 
     fig, ax = plt.subplots(figsize=(8, 5), facecolor=SURFACE)
-    for i, series in enumerate(series_order):
+    for i, (key, label) in enumerate(present):
         offsets = [xi + (i - (n_series - 1) / 2) * bar_width for xi in x]
-        values = [results[series].get(c, 0.0) for c in complexity_levels]
-        bars = ax.bar(offsets, values, width=bar_width, color=series_colors[series],
-                       label=series.capitalize(), zorder=3)
-        annotate_bars(ax, bars)
+        values = [per_jaw_metrics[j][key] for j in jaws]
+        bars = ax.bar(offsets, values, width=bar_width, color=METRIC_COLORS[key], label=label, zorder=3)
+        annotate_bars(ax, bars, fontsize=8)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([str(c) for c in complexity_levels])
+    ax.set_xticklabels([j.capitalize() for j in jaws])
     ax.set_ylim(0, 1.08)
-    ax.set_xlabel("Complexity Class", color=INK)
-    ax.set_ylabel("FDI Tooth-Number Accuracy", color=INK)
+    ax.set_ylabel("Score", color=INK)
     ax.set_title(title, color=INK)
     ax.legend(frameon=False, labelcolor=INK)
     style_axes(ax)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, facecolor=SURFACE)
     plt.close()
+
+
+def plot_single_metric_by_group(results, title, ylabel, out_path, tick_label_fn=str, xlabel="Group"):
+    """Grouped bar chart: one group per bucket key (Angle's Classification, tooth count, ...),
+    one bar per jaw + pooled within each group. Used for metrics that only make sense as a
+    single number - e.g. arch-level exact-match accuracy has no natural precision/recall
+    framing (it's a boolean per-arch flag, not a per-class prediction)."""
+    series_order = [j for j in ("lower", "upper", "pooled") if results.get(j)]
+    keys = sorted({k for j in series_order for k in results[j].keys()})
+
+    x = list(range(len(keys)))
+    n_series = len(series_order)
+    bar_width = 0.8 / max(n_series, 1)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(keys) * 1.2), 5), facecolor=SURFACE)
+    for i, series in enumerate(series_order):
+        offsets = [xi + (i - (n_series - 1) / 2) * bar_width for xi in x]
+        values = [results[series].get(k, 0.0) for k in keys]
+        bars = ax.bar(offsets, values, width=bar_width, color=SERIES_COLORS[series],
+                       label=series.capitalize(), zorder=3)
+        annotate_bars(ax, bars, fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([tick_label_fn(k) for k in keys])
+    ax.set_ylim(0, 1.08)
+    ax.set_xlabel(xlabel, color=INK)
+    ax.set_ylabel(ylabel, color=INK)
+    ax.set_title(title, color=INK)
+    ax.legend(frameon=False, labelcolor=INK)
+    style_axes(ax)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=SURFACE)
+    plt.close()
+
+
+def plot_metrics_by_group(results, title, out_path, tick_label_fn=str, xlabel="Group"):
+    """Small multiples: one subplot per metric (Accuracy/Precision/Recall/F1), each a grouped
+    bar chart with one group per bucket key and one bar per jaw + pooled - mirrors
+    tooth.py's plot_metrics_by_number, generalized to an arbitrary jaw/pooled series set.
+    results: {jaw/"pooled": {bucket_key: {metric: value}}}."""
+    series_order = [j for j in ("lower", "upper", "pooled") if results.get(j)]
+    keys = sorted({k for j in series_order for k in results[j].keys()})
+    metric_names = [key for key, _ in METRIC_DISPLAY
+                    if any(key in results[j].get(k, {}) for j in series_order for k in keys)]
+
+    x = list(range(len(keys)))
+    n_series = len(series_order)
+    bar_width = 0.8 / max(n_series, 1)
+
+    fig, axes = plt.subplots(len(metric_names), 1,
+                              figsize=(max(10, len(keys) * 1.4), 4.5 * len(metric_names)),
+                              facecolor=SURFACE)
+    if len(metric_names) == 1:
+        axes = [axes]
+
+    for ax, metric_key in zip(axes, metric_names):
+        metric_label = dict(METRIC_DISPLAY)[metric_key]
+        for i, series in enumerate(series_order):
+            offsets = [xi + (i - (n_series - 1) / 2) * bar_width for xi in x]
+            values = [results[series].get(k, {}).get(metric_key, 0.0) for k in keys]
+            bars = ax.bar(offsets, values, width=bar_width, color=SERIES_COLORS[series],
+                           label=series.capitalize(), zorder=3)
+            annotate_bars(ax, bars, fontsize=7)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([tick_label_fn(k) for k in keys])
+        ax.set_ylim(0, 1.08)
+        ax.set_ylabel(metric_label, color=INK)
+        style_axes(ax)
+        ax.legend(frameon=False, labelcolor=INK, fontsize=8)
+
+    axes[-1].set_xlabel(xlabel, color=INK)
+    fig.suptitle(title, color=INK, y=0.995)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
+    plt.close()
+
+
+def _bucketed_metrics(items):
+    """items: iterable of (true, pred, bucket_key). Returns {bucket_key: metrics} using
+    compute_metrics (no probability scores available this deep in the pipeline - see
+    compute_metrics docstring)."""
+    buckets = defaultdict(lambda: {"true": [], "pred": []})
+    for true, pred, key in items:
+        buckets[key]["true"].append(true)
+        buckets[key]["pred"].append(pred)
+    return {k: compute_metrics(b["true"], b["pred"]) for k, b in sorted(buckets.items())}
+
+
+def evaluate_fdi_accuracy_by_complexity(per_jaw, complexity_by_image):
+    """Groups the ResNet+ViT pipeline's per-tooth FDI-number performance (test set) by each
+    arch's ground-truth Angle's Classification, so Accuracy/Precision/Recall/F1 can be read as
+    a function of case difficulty rather than just pooled across the whole test set. Takes the
+    already-computed tooth.evaluate_tooth_number() result and arch->complexity lookup (see
+    main()) instead of recomputing either - both are expensive (full ResNet+ViT forward pass
+    over the test set) and shared with evaluate_arch_accuracy."""
+    per_jaw_by_complexity = {}
+    all_items = []
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        items = []
+        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_refined"], d["y_image_name"]):
+            complexity = complexity_by_image.get(image_name)
+            if complexity is None:
+                continue
+            items.append((true_digit, pred_digit, complexity))
+        per_jaw_by_complexity[jaw] = _bucketed_metrics(items)
+        all_items.extend(items)
+
+    per_jaw_by_complexity["pooled"] = _bucketed_metrics(all_items)
+    return per_jaw_by_complexity
+
+
+def evaluate_fdi_accuracy_by_tooth_count(per_jaw):
+    """Same idea as evaluate_fdi_accuracy_by_complexity, but bucketed by how many teeth were
+    detected in the arch a tooth came from - fewer detected teeth means less context for the
+    arch transformer's self-attention, so performance is expected to degrade as tooth count
+    drops."""
+    per_jaw_by_count = {}
+    all_items = []
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        tooth_count = defaultdict(int)
+        for image_name in d["y_image_name"]:
+            tooth_count[image_name] += 1
+
+        items = [
+            (true_digit, pred_digit, tooth_count[image_name])
+            for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_refined"], d["y_image_name"])
+        ]
+        per_jaw_by_count[jaw] = _bucketed_metrics(items)
+        all_items.extend(items)
+
+    per_jaw_by_count["pooled"] = _bucketed_metrics(all_items)
+    return per_jaw_by_count
+
+
+def evaluate_arch_accuracy(per_jaw, complexity_by_image):
+    """For each arch (oral image) in the test set, checks whether EVERY detected tooth's FDI
+    last digit was predicted correctly - a stricter metric than per-tooth accuracy, since one
+    wrong tooth invalidates the whole arch. This is a boolean per-arch flag, not a per-class
+    prediction, so only accuracy is meaningful here (no natural precision/recall/F1 framing).
+    Takes the already-computed tooth.evaluate_tooth_number() result and arch->complexity
+    lookup (see main()) instead of recomputing either.
+
+    Returns (per_jaw_accuracy, per_jaw_by_complexity, per_jaw_by_tooth_count):
+      per_jaw_accuracy: {jaw/"pooled": {"accuracy": float, "n": int}} - n is arch count.
+      per_jaw_by_complexity: {jaw/"pooled": {complexity: accuracy}}.
+      per_jaw_by_tooth_count: {jaw/"pooled": {tooth_count: accuracy}}.
+    """
+    # One record per arch, tagged with its jaw - everything below (per-jaw, pooled, by
+    # complexity, by tooth count) is just a filter/group-by over this single flat list.
+    records = []
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        arches = defaultdict(lambda: {"correct": True, "count": 0, "complexity": None})
+        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_refined"], d["y_image_name"]):
+            arch = arches[image_name]
+            if true_digit != pred_digit:
+                arch["correct"] = False
+            arch["count"] += 1
+            if arch["complexity"] is None:
+                arch["complexity"] = complexity_by_image.get(image_name)
+        for a in arches.values():
+            records.append({"jaw": jaw, **a})
+
+    def accuracy_of(recs):
+        return sum(r["correct"] for r in recs) / len(recs) if recs else 0.0
+
+    per_jaw_accuracy = {}
+    per_jaw_by_complexity = {}
+    per_jaw_by_tooth_count = {}
+
+    for series in ("lower", "upper", "pooled"):
+        recs = records if series == "pooled" else [r for r in records if r["jaw"] == series]
+        per_jaw_accuracy[series] = {"accuracy": accuracy_of(recs), "n": len(recs)}
+
+        by_complexity = defaultdict(list)
+        for r in recs:
+            if r["complexity"] is not None:
+                by_complexity[r["complexity"]].append(r)
+        per_jaw_by_complexity[series] = {c: accuracy_of(rs) for c, rs in sorted(by_complexity.items())}
+
+        by_count = defaultdict(list)
+        for r in recs:
+            by_count[r["count"]].append(r)
+        per_jaw_by_tooth_count[series] = {c: accuracy_of(rs) for c, rs in sorted(by_count.items())}
+
+    return per_jaw_accuracy, per_jaw_by_complexity, per_jaw_by_tooth_count
 
 
 def main():
@@ -247,72 +408,146 @@ def main():
 
     summary = {}
     per_jaw_metrics = {}
-    all_true, all_pred = [], []
+    all_true, all_pred, all_proba = [], [], []
 
     for jaw in ("lower", "upper"):
-        print(f"\nEvaluating {jaw} complexity classifier on test split...")
+        print(f"\nEvaluating {jaw} Angle's Classification model on test split...")
         result = evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset)
         if result is None:
             continue
 
-        metrics = compute_metrics(result["y_true"], result["y_pred"])
+        metrics = compute_metrics(result["y_true"], result["y_pred"], result["y_proba"], len(DISPLAY_LABELS))
         per_jaw_metrics[jaw] = metrics
         summary[jaw] = {**metrics, "n": result["n"]}
         print(f"{jaw}: n={result['n']}, accuracy={metrics['accuracy']:.4f}, "
               f"precision={metrics['precision']:.4f}, recall={metrics['recall']:.4f}, "
-              f"f1={metrics['f1']:.4f}")
+              f"f1={metrics['f1']:.4f}, map={metrics['map']:.4f}")
 
         plot_metric_bars(
             metrics,
-            f"Complexity Classification Performance - {jaw.capitalize()} Jaw (Test Set)",
+            f"Angle's Classification Performance - {jaw.capitalize()} Jaw (Test Set)",
             RESULTS_DIR / f"complexity_metrics_{jaw}.png"
         )
         plot_confusion(
             result["y_true"], result["y_pred"],
-            f"Complexity Confusion Matrix - {jaw.capitalize()} Jaw (Test Set)",
+            f"Angle's Classification Confusion Matrix - {jaw.capitalize()} Jaw (Test Set)",
             RESULTS_DIR / f"complexity_confusion_{jaw}.png"
         )
 
         all_true.extend(result["y_true"])
         all_pred.extend(result["y_pred"])
+        all_proba.extend(result["y_proba"])
 
     if all_true:
-        pooled_metrics = compute_metrics(all_true, all_pred)
+        pooled_metrics = compute_metrics(all_true, all_pred, all_proba, len(DISPLAY_LABELS))
         per_jaw_metrics["pooled"] = pooled_metrics
         summary["pooled"] = {**pooled_metrics, "n": len(all_true)}
-        print(f"\nPooled (both jaws): n={len(all_true)}, accuracy={pooled_metrics['accuracy']:.4f}")
+        print(f"\nPooled (both jaws): n={len(all_true)}, accuracy={pooled_metrics['accuracy']:.4f}, "
+              f"map={pooled_metrics['map']:.4f}")
 
         plot_metric_bars(
             pooled_metrics,
-            "Complexity Classification Performance - Pooled (Test Set)",
+            "Angle's Classification Performance - Pooled (Test Set)",
             RESULTS_DIR / "complexity_metrics_pooled.png"
         )
         plot_confusion(
             all_true, all_pred,
-            "Complexity Confusion Matrix - Pooled (Test Set)",
+            "Angle's Classification Confusion Matrix - Pooled (Test Set)",
             RESULTS_DIR / "complexity_confusion_pooled.png"
         )
 
     if per_jaw_metrics:
-        plot_accuracy_by_jaw(
+        plot_metrics_by_jaw(
             per_jaw_metrics,
-            "Complexity Accuracy by Jaw (Test Set)",
+            "Angle's Classification Performance by Jaw (Test Set)",
             RESULTS_DIR / "complexity_accuracy_by_jaw.png"
         )
 
+    # The FDI accuracy/arch-accuracy breakdowns below all need the full ResNet+ViT
+    # tooth-number pipeline result and the arch->complexity lookup - computed once here and
+    # shared, since evaluate_tooth_number() re-runs a full ResNet forward pass over every test
+    # image and shouldn't be paid for more than once.
+    eval_module = load_module("tooth_eval", GRAPH_DIR / "tooth.py")
+    complexity_build = load_module("vit_complexity_build_eval", COMPLEXITY_DIR / "build_dataset.py")
+    dataset_dir = PROJECT_ROOT.parent / "dataset"
+
     print("\n" + "=" * 70)
-    print("FDI tooth-number accuracy by complexity class (ResNet+ViT, Test Set)")
+    print("Running ResNet+ViT tooth-number pipeline on the test set...")
     print("=" * 70)
-    fdi_by_complexity = evaluate_fdi_accuracy_by_complexity()
-    for series, accs in fdi_by_complexity.items():
-        breakdown = ", ".join(f"complexity {c}: {a:.4f}" for c, a in sorted(accs.items()))
+    per_jaw_tooth_number = eval_module.evaluate_tooth_number()
+    complexity_by_image = complexity_build.load_complexity_labels(dataset_dir, "test")
+
+    print("\n" + "=" * 70)
+    print("FDI tooth-number performance by Angle's Classification (ResNet+ViT, Test Set)")
+    print("=" * 70)
+    fdi_by_complexity = evaluate_fdi_accuracy_by_complexity(per_jaw_tooth_number, complexity_by_image)
+    for series, buckets in fdi_by_complexity.items():
+        breakdown = ", ".join(f"{ANGLE_CLASS_LABELS.get(c, c)}: acc={m['accuracy']:.4f} f1={m['f1']:.4f}"
+                               for c, m in sorted(buckets.items()))
         print(f"{series}: {breakdown}")
-    plot_fdi_accuracy_by_complexity(
+    plot_metrics_by_group(
         fdi_by_complexity,
-        "FDI Tooth-Number Accuracy by Complexity Class (Test Set)",
-        RESULTS_DIR / "complexity_fdi_accuracy_by_complexity.png"
+        "FDI Tooth-Number Performance by Angle's Classification (Test Set)",
+        RESULTS_DIR / "complexity_fdi_accuracy_by_complexity.png",
+        tick_label_fn=lambda c: ANGLE_CLASS_LABELS.get(c, str(c)),
+        xlabel="Angle's Classification",
     )
     summary["fdi_accuracy_by_complexity"] = fdi_by_complexity
+
+    print("\n" + "=" * 70)
+    print("FDI tooth-number performance by detected tooth count (ResNet+ViT, Test Set)")
+    print("=" * 70)
+    fdi_by_tooth_count = evaluate_fdi_accuracy_by_tooth_count(per_jaw_tooth_number)
+    for series, buckets in fdi_by_tooth_count.items():
+        breakdown = ", ".join(f"{c} teeth: acc={m['accuracy']:.4f} f1={m['f1']:.4f}"
+                               for c, m in sorted(buckets.items()))
+        print(f"{series}: {breakdown}")
+    plot_metrics_by_group(
+        fdi_by_tooth_count,
+        "FDI Tooth-Number Performance by Detected Tooth Count (Test Set)",
+        RESULTS_DIR / "complexity_fdi_accuracy_by_tooth_count.png",
+        xlabel="Detected Tooth Count",
+    )
+    summary["fdi_accuracy_by_tooth_count"] = fdi_by_tooth_count
+
+    print("\n" + "=" * 70)
+    print("Arch-level accuracy (every tooth in the arch correct) - Test Set")
+    print("=" * 70)
+    arch_accuracy, arch_accuracy_by_complexity, arch_accuracy_by_tooth_count = evaluate_arch_accuracy(
+        per_jaw_tooth_number, complexity_by_image
+    )
+    for jaw, m in arch_accuracy.items():
+        print(f"{jaw}: n={m['n']}, accuracy={m['accuracy']:.4f}")
+    for series, accs in arch_accuracy_by_complexity.items():
+        breakdown = ", ".join(f"{ANGLE_CLASS_LABELS.get(c, c)}: {a:.4f}" for c, a in sorted(accs.items()))
+        print(f"{series}: {breakdown}")
+    for series, accs in arch_accuracy_by_tooth_count.items():
+        breakdown = ", ".join(f"{c} teeth: {a:.4f}" for c, a in sorted(accs.items()))
+        print(f"{series}: {breakdown}")
+
+    plot_metrics_by_jaw(
+        {j: {"accuracy": m["accuracy"]} for j, m in arch_accuracy.items()},
+        "Arch-Level Accuracy - Every Tooth Correct (Test Set)",
+        RESULTS_DIR / "complexity_arch_accuracy_by_jaw.png"
+    )
+    plot_single_metric_by_group(
+        arch_accuracy_by_complexity,
+        "Arch-Level Accuracy by Angle's Classification (Test Set)",
+        "Arch-Level Accuracy (All Teeth Correct)",
+        RESULTS_DIR / "complexity_arch_accuracy_by_complexity.png",
+        tick_label_fn=lambda c: ANGLE_CLASS_LABELS.get(c, str(c)),
+        xlabel="Angle's Classification",
+    )
+    plot_single_metric_by_group(
+        arch_accuracy_by_tooth_count,
+        "Arch-Level Accuracy by Detected Tooth Count (Test Set)",
+        "Arch-Level Accuracy (All Teeth Correct)",
+        RESULTS_DIR / "complexity_arch_accuracy_by_tooth_count.png",
+        xlabel="Detected Tooth Count",
+    )
+    summary["arch_accuracy"] = arch_accuracy
+    summary["arch_accuracy_by_complexity"] = arch_accuracy_by_complexity
+    summary["arch_accuracy_by_tooth_count"] = arch_accuracy_by_tooth_count
 
     with open(RESULTS_DIR / "complexity_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)

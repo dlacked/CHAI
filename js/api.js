@@ -57,10 +57,10 @@ const cropToothImage = (image, box, padding = 10) => {
 
 const COMPLEXITY_LABELS = ['I', 'II', 'III'];
 
-// Renders the Complexity Class line into its own dedicated element (#complexity-result),
-// deliberately separate from #analysis-result-list - that list gets wiped by
-// clearAnalysisResult() whenever FDI reconstruction succeeds cleanly (see
-// drawFdiNumbers/render.js), but complexity is independent of whether that reconstruction
+// Renders the Angle's Classification line into its own dedicated element
+// (#complexity-result), deliberately separate from #analysis-result-list - that list gets
+// wiped by clearAnalysisResult() whenever FDI reconstruction succeeds cleanly (see
+// drawFdiNumbers/render.js), but this is independent of whether that reconstruction
 // succeeded, so it must survive those clears.
 const renderComplexityStatus = (file) => {
     const el = document.getElementById('complexity-result');
@@ -73,19 +73,19 @@ const renderComplexityStatus = (file) => {
     }
 
     if (complexity.status === 'loading') {
-        el.innerHTML = 'Complexity Class: <span class="analysis-complexity-loading">Predicting...</span>';
+        el.innerHTML = "Angle's Classification: <span class=\"analysis-complexity-loading\">Predicting...</span>";
         return;
     }
     if (complexity.status === 'error') {
-        el.innerHTML = 'Complexity Class: <span class="analysis-complexity-error">Error</span>';
+        el.innerHTML = "Angle's Classification: <span class=\"analysis-complexity-error\">Error</span>";
         return;
     }
     const label = COMPLEXITY_LABELS[complexity.classIdx] ?? '?';
-    el.innerHTML = `Complexity Class: <span class="analysis-complexity-value">${label}</span>`;
+    el.innerHTML = `Angle's Classification: <span class="analysis-complexity-value">Class ${label}</span>`;
 };
 
-// Clears the Complexity Class line - called whenever there are no teeth/jaw to classify at
-// all (FDI unchecked, no predictions/PCA, or jaw classification missing).
+// Clears the Angle's Classification line - called whenever there are no teeth/jaw to classify
+// at all (FDI unchecked, no predictions/PCA, or jaw classification missing).
 const clearComplexityStatus = () => {
     const el = document.getElementById('complexity-result');
     if (el) el.innerHTML = '';

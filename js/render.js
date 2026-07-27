@@ -449,7 +449,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, isLower, hasClassification, f
     const { W_pca, H_pca } = computeArchPcaBounds(predictions, pca, canvas.width, canvas.height);
     const slots = computeArchSlots(predictions, order, W_pca, H_pca, pca);
 
-    // Complexity Class doesn't depend on whether the 12-slot FDI reconstruction below
+    // Angle's Classification doesn't depend on whether the 12-slot FDI reconstruction below
     // succeeds cleanly - it only needs per-tooth geometry - so it's kicked off unconditionally
     // here rather than only in the Holding branch (see runComplexityAnalysis / js/api.js).
     if (file) {

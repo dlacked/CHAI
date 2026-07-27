@@ -23,7 +23,13 @@
       "Bash(git commit -m 'model performance result + complexity classifier, untrack pt/pth files *)",
       "Bash(awk '$4 > 50000000 {print}')",
       "Bash(git push *)",
-      "Bash(python -m py_compile functions/graph/complexity.py functions/graph/evaluate_test_performance.py)"
+      "Bash(python -m py_compile functions/graph/complexity.py functions/graph/evaluate_test_performance.py)",
+      "Bash(python -c \"import scipy; print\\(scipy.__version__\\)\")",
+      "Bash(python -c \"from scipy.optimize import linear_sum_assignment; print\\('OK'\\)\")",
+      "Bash(python -m py_compile functions/graph/complexity.py)",
+      "Bash(python -m py_compile functions/graph/complexity.py js/api.js)",
+      "Bash(python -c \"from sklearn.metrics import average_precision_score; from sklearn.preprocessing import label_binarize; print\\('OK'\\)\")",
+      "Bash(echo \"exit code: $?\")"
     ]
   }
 }
