@@ -1,22 +1,5 @@
 import math
 
-def get_coords(box):
-    """
-    Format bounding box coordinates to 4 decimal places.
-    Args:
-        box (list): [x1, y1, x2, y2] bounding box.
-    Returns:
-        tuple: (x1, y1, x2, y2) as formatted strings.
-    """
-    if not box or len(box) < 4:
-        return "0.0000", "0.0000", "0.0000", "0.0000"
-    return (
-        f"{box[0]:.4f}",
-        f"{box[1]:.4f}",
-        f"{box[2]:.4f}",
-        f"{box[3]:.4f}"
-    )
-
 def rotate_points(points, mean_pt, angle):
     """
     Rotates a list of [x, y] points into the PCA-aligned frame: translate by -mean_pt, then

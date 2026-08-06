@@ -11,7 +11,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from torchvision import models, transforms
 from sklearn.metrics import f1_score, confusion_matrix, ConfusionMatrixDisplay
 
