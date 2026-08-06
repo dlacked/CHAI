@@ -43,6 +43,48 @@ const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
     ctx.fillText(numText, startX + prefixWidth + spacing, centerY + 1);
 };
 
+// Each tooth's color is derived from its FDI number itself (not its array index) via
+// golden-ratio hue distribution, so tooth #36 is always the same color across frames/images
+// instead of shifting with detection order
+const getFdiToothColor = (fdiNumber) => {
+    const hue = (fdiNumber * 137.5) % 360;
+    return {
+        fill: `hsla(${hue}, 70%, 50%, 0.45)`,
+        stroke: `hsla(${hue}, 70%, 50%, 0.95)`
+    };
+};
+
+// Fills/outlines each detected tooth's segmented region once its FDI number is known - teeth
+// without a number yet are left unfilled. Drawn before the number badges so the badges sit on
+// top of the colored regions.
+const drawSegmentation = (predictions, fdiByIndex) => {
+    if (!predictions || predictions.length === 0 || !fdiByIndex) return;
+
+    predictions.forEach((pred, idx) => {
+        const fdiNumber = fdiByIndex[idx];
+        if (!fdiNumber) return;
+
+        const poly = pred.polygon;
+        if (!poly || poly.length === 0) return;
+
+        ctx.beginPath();
+        ctx.moveTo(poly[0][0], poly[0][1]);
+        for (let i = 1; i < poly.length; i++) {
+            ctx.lineTo(poly[i][0], poly[i][1]);
+        }
+        ctx.closePath();
+
+        const { fill, stroke } = getFdiToothColor(fdiNumber);
+
+        ctx.fillStyle = fill;
+        ctx.fill();
+
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+    });
+};
+
 // Determines each detected tooth's FDI tens digit (quadrant) in the Holding state, using the
 // actual sequence of predicted last digits rather than geometry alone. A full arch normally
 // has each last digit (1-6) appear twice - once per quadrant - so whichever arch-order
@@ -90,8 +132,8 @@ const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
 // mirroring the ResNet+ViT branch in drawFdiNumbers but without any DOM writes or triggering
 // the analysis call itself. Always sourced from the ResNet+ViT arch transformer (js/api.js
 // runToothAnalysis) regardless of tooth count - pure-geometry slot assignment was dropped for
-// being less accurate (see functions/graph/12tooth.py's comparison). Used by computeMissingTeeth
-// (sidebar LOSS summary).
+// being less accurate (see functions/graph/12tooth.py's comparison). Used by drawSegmentation
+// (region coloring) and computeMissingTeeth (sidebar LOSS summary).
 const computeFdiByIndexCore = (predictions, pca, isUpper, hasClassification, file) => {
     if (!predictions || !pca || !hasClassification) return null;
 
@@ -216,6 +258,10 @@ const redrawCanvas = () => {
     const isUpper = !!(jawResult && jawResult.isUpper);
     const isLower = !!(jawResult && !jawResult.isUpper);
     const hasClassification = !!jawResult;
+
+    // Colored tooth regions first, so the number badges drawn by drawFdiNumbers sit on top.
+    const fdiByIndex = computeFdiByIndexCore(predictions, pca, isUpper, hasClassification, file);
+    drawSegmentation(predictions, fdiByIndex);
 
     drawFdiNumbers(predictions, pca, isUpper, hasClassification, file);
 
