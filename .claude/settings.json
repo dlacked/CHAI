@@ -47,7 +47,14 @@
       "Bash(.venv/Scripts/python.exe -m playwright install chromium)",
       "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\e603c6fd-df60-4623-8bcb-50b9efaf1de4\\\\scratchpad\\\\ui_test.py\")",
       "Bash(.venv/Scripts/python.exe -m py_compile functions/features/coords.py functions/features/fdi_last.py ResNet/tooth/train.py functions/features/main.py)",
-      "Bash(curl -sf http://localhost:5001/)"
+      "Bash(curl -sf http://localhost:5001/)",
+      "Bash(\"./.venv/Scripts/python.exe\" -)",
+      "Bash(.venv/Scripts/python.exe -m py_compile ViT/arch/build_dataset.py)",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\1b3b47d7-f091-4fc7-9b0e-97ce9d6f827d\\\\scratchpad\\\\test_build_split.py\")",
+      "Bash(nvidia-smi)",
+      "Bash(python -c \"import os; print\\('cpu_count', os.cpu_count\\(\\)\\)\")",
+      "Bash(wmic ComputerSystem get TotalPhysicalMemory)",
+      "Bash(wmic OS get FreePhysicalMemory)"
     ]
   }
 }

@@ -176,10 +176,12 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
     Path(runs_dir).mkdir(parents=True, exist_ok=True)
     
     # 1. Image transforms
+    # No RandomHorizontalFlip/RandomRotation: the [x1,y1,x2,y2,theta] meta vector is read
+    # straight from the CSV regardless of how the image is augmented (see
+    # ToothDataset.__getitem__), so a flipped/rotated crop paired with unchanged geometry
+    # would train on a mismatched pair. ColorJitter is purely photometric, so it's unaffected.
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
         transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])

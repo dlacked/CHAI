@@ -3,7 +3,8 @@ import json
 import argparse
 import importlib.util
 from pathlib import Path
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import cv2
@@ -16,6 +17,8 @@ PROJECT_ROOT = ARCH_DIR.parent.parent
 RESNET_TOOTH_TRAIN_PATH = PROJECT_ROOT / "ResNet" / "tooth" / "train.py"
 
 MAX_TEETH_PER_ARCH = 12  # matches the 12 FDI slots (1-6) used per side/jaw everywhere else
+DEFAULT_CROP_WORKERS = 6  # kept low regardless of core count - this machine is RAM-bound, not CPU-bound
+DEFAULT_BATCH_TEETH = 96  # teeth per ResNet forward call, ~batch_teeth/12 arches at a time
 
 
 def _load_module(name, path):
@@ -117,7 +120,8 @@ def load_resnet(jaw, model_dir, device):
     return model
 
 
-def build_split(jaw, split, dataset_dir, csv_dir, model_dir, device):
+def build_split(jaw, split, dataset_dir, csv_dir, model_dir, device,
+                 crop_workers=DEFAULT_CROP_WORKERS, batch_teeth=DEFAULT_BATCH_TEETH):
     csv_path = Path(csv_dir) / f"{jaw}_features_{split}.csv"
     if not csv_path.exists():
         print(f"CSV not found: {csv_path}. Skipping {jaw}/{split}.")
@@ -136,31 +140,77 @@ def build_split(jaw, split, dataset_dir, csv_dir, model_dir, device):
     for row in dataset.rows:
         groups.setdefault(row['image_name'], []).append(row)
 
-    sequences = []
+    items = []
     skipped_long = 0
-    with torch.no_grad():
-        for image_name, rows in groups.items():
-            if len(rows) > MAX_TEETH_PER_ARCH:
-                skipped_long += 1
-                rows = rows[:MAX_TEETH_PER_ARCH]
+    for image_name, rows in groups.items():
+        if len(rows) > MAX_TEETH_PER_ARCH:
+            skipped_long += 1
+            rows = rows[:MAX_TEETH_PER_ARCH]
+        items.append((image_name, rows))
 
-            imgs, metas, labels = crop_teeth_for_image(dataset_dir, split, jaw, image_name, rows, val_transform)
+    def crop_job(image_name, rows):
+        return crop_teeth_for_image(dataset_dir, split, jaw, image_name, rows, val_transform)
 
-            imgs = torch.stack(imgs).to(device)
-            metas = torch.stack(metas).to(device)
-
-            img_vec = resnet.resnet(imgs)                                    # (K, 512) "segmented image vector"
-            meta_feat = resnet.meta_fc(metas)                                 # (K, 256)
+    def flush(pending):
+        # One ResNet forward call per batch of arches instead of per arch (<=12 teeth) - the
+        # original per-arch batch size left the GPU underused relative to the CPU crop/decode cost.
+        all_imgs = torch.cat([torch.stack(imgs) for _, imgs, _, _ in pending]).to(device)
+        all_metas = torch.cat([torch.stack(metas) for _, _, metas, _ in pending]).to(device)
+        with torch.no_grad():
+            img_vec = resnet.resnet(all_imgs)                                    # (N, 512)
+            meta_feat = resnet.meta_fc(all_metas)                                # (N, 256)
             logits = resnet.classifier(torch.cat([img_vec, meta_feat], dim=1))
-            prob_vec = torch.softmax(logits, dim=1)                           # (K, 6) "resnet tooth possibility vector"
+            prob_vec = torch.softmax(logits, dim=1)                              # (N, 6)
 
-            sequences.append({
+        out = []
+        offset = 0
+        for image_name, imgs, _, labels in pending:
+            k = len(imgs)
+            out.append({
                 "image_name": image_name,
-                "geom": metas.cpu(),
-                "img_vec": img_vec.cpu(),
-                "prob_vec": prob_vec.cpu(),
+                "geom": all_metas[offset:offset + k].cpu(),
+                "img_vec": img_vec[offset:offset + k].cpu(),
+                "prob_vec": prob_vec[offset:offset + k].cpu(),
                 "target": torch.tensor(labels, dtype=torch.long),
             })
+            offset += k
+        return out
+
+    # Crop/decode runs on a bounded thread pool (cv2/PIL/torch ops release the GIL, so this
+    # overlaps disk + CPU crop work with the GPU forward pass) while keeping only `window` arches'
+    # worth of cropped tensors resident at once, instead of buffering the whole split in memory.
+    sequences = []
+    pending, pending_teeth = [], 0
+    window = crop_workers * 2  # kept small - each slot holds a full decoded page image + crops
+    with ThreadPoolExecutor(max_workers=crop_workers) as executor:
+        it = iter(items)
+        futures = deque()
+
+        def submit_next():
+            image_name, rows = next(it, (None, None))
+            if image_name is None:
+                return False
+            futures.append((image_name, executor.submit(crop_job, image_name, rows)))
+            return True
+
+        for _ in range(window):
+            if not submit_next():
+                break
+
+        while futures:
+            image_name, fut = futures.popleft()
+            imgs, metas, labels = fut.result()
+            submit_next()
+
+            n = len(imgs)
+            if pending and pending_teeth + n > batch_teeth:
+                sequences.extend(flush(pending))
+                pending, pending_teeth = [], 0
+            pending.append((image_name, imgs, metas, labels))
+            pending_teeth += n
+
+    if pending:
+        sequences.extend(flush(pending))
 
     if skipped_long:
         print(f"Warning: {skipped_long} arches in {jaw}/{split} had more than {MAX_TEETH_PER_ARCH} teeth; truncated.")
@@ -180,6 +230,10 @@ def main():
     parser.add_argument("--model_dir", type=str, default=str(model_dir_default))
     parser.add_argument("--cache_dir", type=str, default=str(cache_dir_default))
     parser.add_argument("--force", action="store_true", help="Overwrite existing cache files")
+    parser.add_argument("--crop_workers", type=int, default=DEFAULT_CROP_WORKERS,
+                         help="Threads used to decode/crop images concurrently with GPU forward passes")
+    parser.add_argument("--batch_teeth", type=int, default=DEFAULT_BATCH_TEETH,
+                         help="Teeth per ResNet forward call (multiple arches batched together)")
     args = parser.parse_args()
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -195,7 +249,8 @@ def main():
                 print(f"Cache already exists: {out_path}. Skipping (use --force to overwrite).")
                 continue
             print(f"\nBuilding {jaw}/{split} arch sequences...")
-            sequences = build_split(jaw, split, args.dataset_dir, args.csv_dir, args.model_dir, device)
+            sequences = build_split(jaw, split, args.dataset_dir, args.csv_dir, args.model_dir, device,
+                                     crop_workers=args.crop_workers, batch_teeth=args.batch_teeth)
             if not sequences:
                 continue
             n_teeth = sum(len(s["target"]) for s in sequences)
