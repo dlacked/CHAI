@@ -3,16 +3,11 @@ const fileInput = document.getElementById('oral-image-input');
 const filesInput = document.getElementById('oral-image-files');
 const fileStatus = document.getElementById('oral-image-status');
 
-// Master switch: when checked, forces every 2D VIEW checkbox on and locked
-const autoAllCb = document.getElementById('auto-all-checkbox');
-
-// 2D VIEW Checkboxes
-const jawCb = document.getElementById('jaw-classification-checkbox');
-const yoloCb = document.getElementById('yolov8-seg-checkbox');
-const pcaCb = document.getElementById('pca-checkbox');
-const archPathCb = document.getElementById('arch-path-checkbox');
-const fdiCb = document.getElementById('fdi-checkbox');
-const palmerCb = document.getElementById('palmer-checkbox');
+// Single on/off switch: On runs the full pipeline (segmentation through FDI numbering) and
+// labels the image; Off just displays the raw image with no processing.
+const pipelineOnRadio = document.getElementById('pipeline-on-radio');
+const pipelineOffRadio = document.getElementById('pipeline-off-radio');
+const isPipelineOn = () => pipelineOnRadio.checked;
 
 let imageFiles = [];
 let currentImageIndex = 0;

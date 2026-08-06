@@ -38,7 +38,14 @@
       "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\e603c6fd-df60-4623-8bcb-50b9efaf1de4\\\\scratchpad\\\\test_ordering_fix.py\")",
       "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id,StartTime,CPU\")",
       "Bash(.venv/Scripts/python.exe -c ' *)",
-      "Bash(.venv/Scripts/python.exe -m py_compile server.py)"
+      "Bash(.venv/Scripts/python.exe -m py_compile server.py)",
+      "Bash(timeout 60 bash -c 'until curl -sf http://localhost:5001/ >/dev/null 2>&1; do sleep 1; done')",
+      "Bash(chromium-cli --session chai)",
+      "Bash(npx --yes playwright --version)",
+      "Bash(.venv/Scripts/python.exe -c \"import playwright; print\\('playwright available'\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pip install playwright --quiet)",
+      "Bash(.venv/Scripts/python.exe -m playwright install chromium)",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\e603c6fd-df60-4623-8bcb-50b9efaf1de4\\\\scratchpad\\\\ui_test.py\")"
     ]
   }
 }

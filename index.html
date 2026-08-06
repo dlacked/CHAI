@@ -42,43 +42,15 @@
                 <div id="oral-image-status" class="sidebar-status">No directory selected</div>
             </div>
             <div class="sidebar-section">
+                <div class="sidebar-label">CHAI Model</div>
                 <div class="sidebar-item">
                     <section>
-                        <input type="checkbox" id="auto-all-checkbox" checked>
-                        <label for="auto-all-checkbox">Select All</label>
-                    </section>
-                </div>
-            </div>
-            <div class="sidebar-section">
-                <div class="sidebar-label">2D VIEW</div>
-                <div class="sidebar-item">
-                    <section>
-                        <input type="checkbox" id="yolov8-seg-checkbox" disabled>
-                        <label for="yolov8-seg-checkbox">Tooth Segmentation</label>
+                        <input type="radio" id="pipeline-on-radio" name="pipeline-mode" checked>
+                        <label for="pipeline-on-radio">ON</label>
                     </section>
                     <section>
-                        <input type="checkbox" id="pca-checkbox">
-                        <label for="pca-checkbox">PCA</label>
-                    </section>
-                    <section>
-                        <input type="checkbox" id="jaw-classification-checkbox">
-                        <label for="jaw-classification-checkbox">Jaw Classification</label>
-                    </section>
-                    <section>
-                        <input type="checkbox" id="arch-path-checkbox">
-                        <label for="arch-path-checkbox">Held-Karp DP</label>
-                    </section>
-                </div>
-            </div>
-            <div class="sidebar-section">
-                <div class="sidebar-item">
-                    <section>
-                        <input type="radio" id="fdi-checkbox" name="tooth-notation">
-                        <label for="fdi-checkbox">FDI</label>
-                    </section>
-                    <section>
-                        <input type="radio" id="palmer-checkbox" name="tooth-notation">
-                        <label for="palmer-checkbox">Palmer</label>
+                        <input type="radio" id="pipeline-off-radio" name="pipeline-mode">
+                        <label for="pipeline-off-radio">OFF</label>
                     </section>
                 </div>
             </div>

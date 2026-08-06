@@ -1,6 +1,5 @@
-// Draws a black badge with an optional '#' prefix + tooth number/notation (white prefix,
-// bright green number) centered at the given point. prefix defaults to '#' for FDI - pass ''
-// for Palmer notation, which has no such convention (see formatToothLabel).
+// Draws a black badge with a '#' prefix + FDI tooth number (white prefix, bright green
+// number) centered at the given point.
 const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
     const boxWidth = 76;
     const boxHeight = 50;
@@ -42,66 +41,6 @@ const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
     ctx.fillStyle = '#39ff14';
     ctx.font = 'bold 30px sans-serif';
     ctx.fillText(numText, startX + prefixWidth + spacing, centerY + 1);
-};
-
-// Palmer notation quadrant abbreviations, keyed by FDI quadrant digit (1=UL, 2=UR, 3=LR,
-// 4=LL - same quadrant order as every fdiLabels array in this file). R/L here match this
-// app's on-screen left/right, not FDI's patient-relative convention - swapped from the
-// textbook FDI-quadrant-1-is-patient's-upper-right mapping per user report.
-const PALMER_QUADRANT_LABELS = { 1: 'UL', 2: 'UR', 3: 'LR', 4: 'LL' };
-
-// Formats a full 2-digit FDI number (e.g. 46) as either plain FDI text or Palmer quadrant
-// abbreviation + tooth number (e.g. "UR6"), depending on which radio (fdiCb/palmerCb) is
-// currently selected.
-const formatToothLabel = (fdiNumber, notation) => {
-    if (notation !== 'palmer') return String(fdiNumber);
-    const quadrant = Math.floor(fdiNumber / 10);
-    const digit = fdiNumber % 10;
-    const label = PALMER_QUADRANT_LABELS[quadrant];
-    return label ? `${label}${digit}` : String(fdiNumber);
-};
-
-// Default color for a tooth whose FDI number hasn't been determined yet: transparent green
-const UNLABELED_TOOTH_FILL = 'rgba(0, 200, 83, 0.18)';
-const UNLABELED_TOOTH_STROKE = 'rgba(0, 200, 83, 0.55)';
-
-// Once a tooth's FDI number is known, its color is derived from the number itself (not its
-// array index) via golden-ratio hue distribution, so tooth #36 is always the same color
-// across frames/images instead of shifting with detection order
-const getFdiToothColor = (fdiNumber) => {
-    const hue = (fdiNumber * 137.5) % 360;
-    return {
-        fill: `hsla(${hue}, 70%, 50%, 0.45)`,
-        stroke: `hsla(${hue}, 70%, 50%, 0.95)`
-    };
-};
-
-const drawSegmentation = (predictions, fdiByIndex) => {
-    if (!predictions || predictions.length === 0) return;
-
-    predictions.forEach((pred, idx) => {
-        const poly = pred.polygon;
-        if (!poly || poly.length === 0) return;
-
-        ctx.beginPath();
-        ctx.moveTo(poly[0][0], poly[0][1]);
-        for (let i = 1; i < poly.length; i++) {
-            ctx.lineTo(poly[i][0], poly[i][1]);
-        }
-        ctx.closePath();
-
-        const fdiNumber = fdiByIndex ? fdiByIndex[idx] : null;
-        const { fill, stroke } = fdiNumber
-            ? getFdiToothColor(fdiNumber)
-            : { fill: UNLABELED_TOOTH_FILL, stroke: UNLABELED_TOOTH_STROKE };
-
-        ctx.fillStyle = fill;
-        ctx.fill();
-
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 3;
-        ctx.stroke();
-    });
 };
 
 // Determines each detected tooth's FDI tens digit (quadrant) in the Holding state, using the
@@ -149,13 +88,10 @@ const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
 
 // Pure computation of each prediction's FDI number (parallel array, null where still unknown),
 // mirroring the ResNet+ViT branch in drawFdiNumbers but without any DOM writes or triggering
-// the analysis call itself - used purely to color drawSegmentation's polygons as soon as a
-// number is available. Always sourced from the ResNet+ViT arch transformer (js/api.js
+// the analysis call itself. Always sourced from the ResNet+ViT arch transformer (js/api.js
 // runToothAnalysis) regardless of tooth count - pure-geometry slot assignment was dropped for
-// being less accurate (see functions/graph/12tooth.py's comparison).
-// Core FDI-per-detected-tooth computation, independent of the FDI/Palmer checkboxes - shared
-// by computeFdiByIndex (segmentation coloring, gated on those checkboxes) and
-// computeMissingTeeth (sidebar LOSS summary, which must NOT depend on them - see user request).
+// being less accurate (see functions/graph/12tooth.py's comparison). Used by computeMissingTeeth
+// (sidebar LOSS summary).
 const computeFdiByIndexCore = (predictions, pca, isUpper, hasClassification, file) => {
     if (!predictions || !pca || !hasClassification) return null;
 
@@ -178,14 +114,8 @@ const computeFdiByIndexCore = (predictions, pca, isUpper, hasClassification, fil
     return null;
 };
 
-const computeFdiByIndex = (predictions, pca, isUpper, hasClassification, file) => {
-    if (!(fdiCb.checked || palmerCb.checked)) return null;
-    return computeFdiByIndexCore(predictions, pca, isUpper, hasClassification, file);
-};
-
-// The raw FDI numbers (not display text - see formatToothLabel for that) of teeth judged
-// missing from this jaw's 12-slot layout, independent of any 2D VIEW checkbox (FDI, Palmer) -
-// runs purely off segmentation + jaw classification (and, in the Holding state, the arch
+// The raw FDI numbers of teeth judged missing from this jaw's 12-slot layout - runs purely
+// off segmentation + jaw classification (and, in the Holding state, the arch
 // transformer's per-tooth predictions via computeFdiByIndexCore) whenever fewer than 12 teeth
 // are detected.
 const computeMissingTeeth = (predictions, pca, isUpper, isLower, hasClassification, file) => {
@@ -201,93 +131,11 @@ const computeMissingTeeth = (predictions, pca, isUpper, isLower, hasClassificati
     return fdiLabels.filter(n => !found.has(n));
 };
 
-const drawPcaOverlay = (pca) => {
-    if (!pca || !pcaCb.checked) return;
-
-    // Draw the connection line (horizontal reference in rotated context)
-    ctx.beginPath();
-    ctx.moveTo(pca.pLeft.x, pca.pLeft.y);
-    ctx.lineTo(pca.pRight.x, pca.pRight.y);
-    ctx.strokeStyle = '#ff3366';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([6, 6]);
-    ctx.stroke();
-    ctx.setLineDash([]); // Reset
-
-    // Draw left topmost point
-    ctx.beginPath();
-    ctx.arc(pca.pLeft.x, pca.pLeft.y, 8, 0, 2 * Math.PI);
-    ctx.fillStyle = '#ff3366';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Draw right topmost point
-    ctx.beginPath();
-    ctx.arc(pca.pRight.x, pca.pRight.y, 8, 0, 2 * Math.PI);
-    ctx.fillStyle = '#ff3366';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Draw center pivot point
-    ctx.beginPath();
-    ctx.arc(pca.center.x, pca.center.y, 10, 0, 2 * Math.PI);
-    ctx.fillStyle = '#00e5ff';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-};
-
-const drawArchPath = (predictions, pca, isUpper) => {
-    if (!archPathCb.checked || !predictions) return;
-    if (predictions.length < 2) return;
-
-    // Compute centroids
-    const vertices = predictions.map(pred => computeCentroid(pred.polygon));
-
-    // Nearest-neighbor greedy order through all teeth
-    const order = computeArchOrder(vertices, pca, isUpper);
-
-    // Draw path edges (dashed lines) - no distance labels for now
-    for (let i = 0; i < order.length - 1; i++) {
-        const uPt = vertices[order[i]];
-        const vPt = vertices[order[i + 1]];
-
-        ctx.beginPath();
-        ctx.moveTo(uPt.x, uPt.y);
-        ctx.lineTo(vPt.x, vPt.y);
-        ctx.strokeStyle = '#00ff66'; // Vibrant green
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([5, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]); // Reset
-    }
-
-    // Draw vertices (centroids)
-    vertices.forEach(pt => {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
-        ctx.fillStyle = '#00ff66';
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-    });
-};
-
-// Labels teeth in nearest-neighbor arch order regardless of tooth count
+// Labels teeth in arch order regardless of tooth count, and kicks off the per-tooth (ResNet+ViT)
+// and per-arch (Angle's Classification) analysis calls. Only ever invoked when the pipeline is
+// On - see redrawCanvas.
 const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
-    if (!(fdiCb.checked || palmerCb.checked) || !predictions || !pca) {
-        clearAnalysisResult();
-        clearComplexityStatus();
-        return;
-    }
-
-    if (!hasClassification) {
+    if (!predictions || !pca || !hasClassification) {
         clearAnalysisResult();
         clearComplexityStatus();
         return;
@@ -312,8 +160,6 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
         runComplexityAnalysis(file, jaw, complexityTeeth);
     }
 
-    const notation = palmerCb.checked ? 'palmer' : 'fdi';
-
     // FDI numbers always come from the ResNet+ViT arch transformer (js/api.js
     // runToothAnalysis and server.py /tooth_predict), regardless of tooth count -
     // pure-geometry slot assignment was dropped for being less accurate (see
@@ -332,7 +178,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
 
             const centerX = (pred.box[0] + pred.box[2]) / 2;
             const centerY = (pred.box[1] + pred.box[3]) / 2;
-            drawFdiNumberBadge(centerX, centerY, formatToothLabel(fdiNumber, notation), notation === 'palmer' ? '' : '#');
+            drawFdiNumberBadge(centerX, centerY, String(fdiNumber));
         });
     }
 
@@ -345,12 +191,21 @@ const redrawCanvas = () => {
     if (!currentImage) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(currentImage, 0, 0);
+
+    // Pipeline Off: just the raw image, no processing and no sidebar info.
+    if (!isPipelineOn()) {
+        clearAnalysisResult();
+        clearComplexityStatus();
+        renderLossStatus([]);
+        return;
+    }
 
     const file = imageFiles[currentImageIndex];
     const predictions = file ? segmentationCache[file.name] : null;
 
-    // Jaw (upper/lower) is now determined geometrically from the arch's curvature the moment
-    // segmentation results are available - no more /classify round trip (see
+    // Jaw (upper/lower) is determined geometrically from the arch's curvature the moment
+    // segmentation results are available - no /classify round trip (see
     // classifyJawByCurvature in js/geometry.js).
     let pca = null;
     let jawResult = null;
@@ -362,32 +217,8 @@ const redrawCanvas = () => {
     const isLower = !!(jawResult && !jawResult.isUpper);
     const hasClassification = !!jawResult;
 
-    ctx.save();
-    if (pca && pcaCb.checked) {
-        // Rotate around the PCA center
-        ctx.translate(pca.center.x, pca.center.y);
-        ctx.rotate(-pca.angle);
-        ctx.translate(-pca.center.x, -pca.center.y);
-    }
-
-    // Draw the main image
-    ctx.drawImage(currentImage, 0, 0);
-
-    // Draw YOLO Segmentation if checked
-    if (yoloCb.checked && predictions) {
-        const fdiByIndex = computeFdiByIndex(predictions, pca, isUpper, hasClassification, file);
-        drawSegmentation(predictions, fdiByIndex);
-    }
-
-    drawPcaOverlay(pca);
-    drawArchPath(predictions, pca, isUpper);
     drawFdiNumbers(predictions, pca, isUpper, hasClassification, file);
 
-    // Independent of FDI/Palmer being checked - see computeMissingTeeth. Still formatted per
-    // whichever notation is selected (defaulting to FDI), same as the badges.
-    const lossNotation = palmerCb.checked ? 'palmer' : 'fdi';
     const missingNumbers = computeMissingTeeth(predictions, pca, isUpper, isLower, hasClassification, file);
-    renderLossStatus(missingNumbers.map(n => formatToothLabel(n, lossNotation)), lossNotation);
-
-    ctx.restore();
+    renderLossStatus(missingNumbers);
 };

@@ -1,11 +1,6 @@
-// Once segmentation succeeds, check Tooth Segmentation and let updateCheckboxStates() cascade
-// the rest (Select All forces everything on; otherwise jaw classification/PCA/etc. need no
-// extra network call - they're all derived synchronously from the segmentation result inside
-// redrawCanvas() - so there's nothing further to trigger here, unlike the old jaw-classify-
-// first flow where this step had to kick off segmentImage() for the next stage)
+// Once segmentation succeeds, everything downstream (jaw classification/PCA/arch order/FDI
+// numbering) is derived synchronously from the segmentation result inside redrawCanvas().
 const onSegmented = (file) => {
-    yoloCb.checked = true;
-    updateCheckboxStates();
     redrawCanvas();
 };
 
@@ -92,18 +87,15 @@ const clearComplexityStatus = () => {
 };
 
 // Renders the LOSS: line into its own dedicated element (#loss-result), listing the missing
-// teeth already formatted per the current notation (see formatToothLabel/render.js) -
-// missingLabels are display text, not raw FDI numbers. '#' prefix matches the FDI badge
-// convention and is omitted for Palmer, same as drawFdiNumberBadge.
-const renderLossStatus = (missingLabels, notation) => {
+// teeth's raw FDI numbers with the same '#' prefix convention as drawFdiNumberBadge.
+const renderLossStatus = (missingNumbers) => {
     const el = document.getElementById('loss-result');
     if (!el) return;
-    if (!missingLabels || missingLabels.length === 0) {
+    if (!missingNumbers || missingNumbers.length === 0) {
         el.textContent = '';
         return;
     }
-    const prefix = notation === 'palmer' ? '' : '#';
-    el.textContent = `LOSS: ${missingLabels.map(n => `${prefix}${n}`).join(', ')}`;
+    el.textContent = `LOSS: ${missingNumbers.map(n => `#${n}`).join(', ')}`;
 };
 
 // Renders the cached per-tooth probability vectors (left-to-right arch order) into the

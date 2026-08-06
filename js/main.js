@@ -26,9 +26,8 @@ const displayImage = (index) => {
     };
     img.src = currentObjectURL;
 
-    // 이미지 바뀔 때마다 segmentation 새로 수행 - jaw classification은 이제 세그멘테이션
-    // 결과로부터 redrawCanvas()가 즉시(동기적으로) 계산하므로 별도 호출이 필요 없다
-    if (yoloCb.checked) {
+    // Pipeline Off: just show the image, no segmentation call
+    if (isPipelineOn()) {
         segmentImage(file);
     }
 };
@@ -36,9 +35,6 @@ const displayImage = (index) => {
 const handleSelectedFiles = (files, sourceInput) => {
     if (files.length === 0) {
         fileStatus.textContent = 'No directory selected';
-        yoloCb.disabled = true;
-        yoloCb.checked = false;
-        updateCheckboxStates();
         return;
     }
 
@@ -55,19 +51,11 @@ const handleSelectedFiles = (files, sourceInput) => {
         currentSliceDisplay.textContent = 'Image: 0/0';
         fileNameDisplay.textContent = 'File: Not Opened';
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        yoloCb.disabled = true;
-        yoloCb.checked = false;
-        updateCheckboxStates();
         return;
     }
 
     currentImageIndex = 0;
     displayImage(currentImageIndex);
-
-    // Enable checkbox and trigger segmentation
-    yoloCb.disabled = false;
-    segmentImage(imageFiles[0]);
 };
 
 fileInput.addEventListener('change', () => {
@@ -110,114 +98,14 @@ if (saved === '0') {
     applyMode(false);
 }
 
-// 2D VIEW Checkbox Dependency Logic
-const updateCheckboxStates = () => {
-    // Select All: force every feature checkbox checked and lock it so the user can't turn
-    // anything off. Each level only locks once the one above it is actually checked, so the
-    // chain still lights up progressively as classification/segmentation complete.
-    if (autoAllCb.checked) {
-        if (imageFiles.length > 0) {
-            yoloCb.checked = true;
-            yoloCb.disabled = true;
-        }
-
-        pcaCb.checked = yoloCb.checked;
-        pcaCb.disabled = true;
-
-        jawCb.checked = pcaCb.checked;
-        jawCb.disabled = true;
-
-        archPathCb.checked = jawCb.checked;
-        archPathCb.disabled = true;
-
-        // Unlike the stages above, FDI vs Palmer is a display-mode *choice*, not a pipeline
-        // dependency, so Select All forces some notation on (defaulting to FDI the first time)
-        // but leaves both radios enabled - the user can still switch between them.
-        if (archPathCb.checked && !fdiCb.checked && !palmerCb.checked) {
-            fdiCb.checked = true;
-        }
-        const notationOn = archPathCb.checked;
-        fdiCb.disabled = !notationOn;
-        palmerCb.disabled = !notationOn;
-        if (!notationOn) {
-            fdiCb.checked = false;
-            palmerCb.checked = false;
-        }
-
-        return;
-    }
-
-    pcaCb.disabled = !yoloCb.checked;
-    if (pcaCb.disabled) pcaCb.checked = false;
-
-    jawCb.disabled = !pcaCb.checked;
-    if (jawCb.disabled) {
-        jawCb.checked = false;
-    }
-
-    // Arch Path is enabled when Jaw Classification is checked
-    archPathCb.disabled = !jawCb.checked;
-    if (archPathCb.disabled) {
-        archPathCb.checked = false;
-    }
-
-    // FDI/Palmer notation choice is enabled when Arch Path is checked
-    const notationDisabled = !archPathCb.checked;
-    fdiCb.disabled = notationDisabled;
-    palmerCb.disabled = notationDisabled;
-    if (notationDisabled) {
-        fdiCb.checked = false;
-        palmerCb.checked = false;
-        clearAnalysisResult();
-        clearComplexityStatus();
-    }
-};
-
-autoAllCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    if (yoloCb.checked && imageFiles.length > 0) {
-        segmentImage(imageFiles[currentImageIndex]);
-    } else {
-        redrawCanvas();
-    }
+// Pipeline On: run segmentImage (which itself short-circuits to the cached result and
+// redraws immediately if this file was already segmented before Off was toggled on).
+pipelineOnRadio.addEventListener('change', () => {
+    if (!pipelineOnRadio.checked || imageFiles.length === 0) return;
+    segmentImage(imageFiles[currentImageIndex]);
 });
 
-yoloCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    if (yoloCb.checked) {
-        if (imageFiles.length > 0) {
-            segmentImage(imageFiles[currentImageIndex]);
-        }
-    } else {
-        redrawCanvas();
-    }
-});
-
-jawCb.addEventListener('change', () => {
-    updateCheckboxStates();
+pipelineOffRadio.addEventListener('change', () => {
+    if (!pipelineOffRadio.checked) return;
     redrawCanvas();
 });
-
-pcaCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-archPathCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-fdiCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-palmerCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-// Initialize states
-yoloCb.disabled = true;
-updateCheckboxStates();
