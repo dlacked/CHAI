@@ -368,35 +368,38 @@ def evaluate_tooth_number():
     return per_jaw
 
 
-def plot_tooth_number_confusion(per_jaw, out_path_template):
+def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template):
+    """Plots one confusion matrix per jaw for a single prediction source (pred_key is
+    'y_resnet' for the ResNet-only baseline or 'y_refined' for the pipeline's final output -
+    both are already collected per-tooth in evaluate_tooth_number(), just not both plotted
+    before). Called twice from main() so the two are directly comparable side by side."""
     display_labels = ["1", "2", "3", "4", "5", "6"]
     for jaw, data in per_jaw.items():
-        cm = confusion_matrix(data["y_true"], data["y_refined"], labels=list(range(6)))
+        cm = confusion_matrix(data["y_true"], data[pred_key], labels=list(range(6)))
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=display_labels)
         fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
         disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
-        title_suffix = "ResNet+ViT" if data["has_arch_model"] else "ResNet-only"
-        ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({title_suffix})", color=INK)
+        ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({label})", color=INK)
         plt.tight_layout()
         out_path = Path(str(out_path_template).format(jaw=jaw))
         plt.savefig(out_path, dpi=150, facecolor=SURFACE)
         plt.close()
 
 
-def compute_tooth_number_metrics(per_jaw):
-    """Accuracy/precision/recall (macro, over the 6 last-digit classes) of the pipeline's
-    final prediction (ResNet+ViT where an arch transformer exists for that jaw, ResNet-only
-    otherwise) against the GT last digit, pooled across both jaws."""
-    all_true, all_refined = [], []
+def compute_tooth_number_metrics(per_jaw, pred_key):
+    """Accuracy/precision/recall (macro, over the 6 last-digit classes) of one prediction
+    source (pred_key: 'y_resnet' for the ResNet-only baseline, 'y_refined' for the pipeline's
+    final ResNet+ViT output) against the GT last digit, pooled across both jaws."""
+    all_true, all_pred = [], []
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
         all_true += d["y_true"]
-        all_refined += d["y_refined"]
+        all_pred += d[pred_key]
 
     return {
-        "accuracy": accuracy_score(all_true, all_refined),
-        "precision": precision_score(all_true, all_refined, average="macro", zero_division=0),
-        "recall": recall_score(all_true, all_refined, average="macro", zero_division=0),
+        "accuracy": accuracy_score(all_true, all_pred),
+        "precision": precision_score(all_true, all_pred, average="macro", zero_division=0),
+        "recall": recall_score(all_true, all_pred, average="macro", zero_division=0),
     }
 
 
@@ -463,13 +466,30 @@ def main():
     print("Part 2: Tooth number - is the predicted FDI digit the true one?")
     print("=" * 70)
     per_jaw = evaluate_tooth_number()
-    plot_tooth_number_confusion(per_jaw, RESULTS_DIR / "tooth_number_confusion_{jaw}.png")
-    number_metrics = compute_tooth_number_metrics(per_jaw)
-    plot_metric_triplet(
-        number_metrics,
-        "Tooth Number Performance (Test Set)",
-        RESULTS_DIR / "tooth_number_metrics.png"
+
+    # ResNet-only baseline vs the pipeline's final ResNet+ViT output, plotted and scored
+    # separately so the refinement's effect is directly visible (both predictions were already
+    # collected per-tooth in evaluate_tooth_number(), just not both surfaced before).
+    plot_tooth_number_confusion(
+        per_jaw, "y_resnet", "ResNet-only", RESULTS_DIR / "tooth_number_confusion_resnet_{jaw}.png"
     )
+    plot_tooth_number_confusion(
+        per_jaw, "y_refined", "ResNet+ViT", RESULTS_DIR / "tooth_number_confusion_vit_{jaw}.png"
+    )
+
+    resnet_metrics = compute_tooth_number_metrics(per_jaw, "y_resnet")
+    vit_metrics = compute_tooth_number_metrics(per_jaw, "y_refined")
+    plot_metric_triplet(
+        resnet_metrics,
+        "Tooth Number Performance - ResNet-only (Test Set)",
+        RESULTS_DIR / "tooth_number_metrics_resnet.png"
+    )
+    plot_metric_triplet(
+        vit_metrics,
+        "Tooth Number Performance - ResNet+ViT (Test Set)",
+        RESULTS_DIR / "tooth_number_metrics_vit.png"
+    )
+
     number_metrics_by_number = compute_tooth_number_metrics_by_number(per_jaw)
     plot_metrics_by_number(
         number_metrics_by_number,
@@ -477,7 +497,7 @@ def main():
         RESULTS_DIR / "tooth_number_by_number.png"
     )
     summary["tooth_number"] = {
-        "metrics": number_metrics,
+        "metrics": {"resnet_only": resnet_metrics, "resnet_vit": vit_metrics},
         "metrics_by_number": number_metrics_by_number,
         "per_jaw": {
             jaw: {k: v for k, v in d.items() if k not in ("y_true", "y_resnet", "y_refined", "y_fdi_number", "y_image_name")}

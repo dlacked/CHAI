@@ -15,7 +15,7 @@ if str(features_dir) not in sys.path:
 # Import our custom modules
 from coords import get_normalized_coords
 from fdi_last import get_centroid
-from theta import get_theta_values, calculate_pca_rotation
+from theta import get_theta_values, calculate_pca_rotation, compute_arch_order
 
 def process_jaw(jaw, split, dataset_dir, output_csv):
     json_dir = Path(dataset_dir) / split / "labels_json" / jaw
@@ -105,10 +105,14 @@ def process_jaw(jaw, split, dataset_dir, output_csv):
                 pca_info = pca_results[i]
                 item["rotated_x"] = pca_info["rotated_x"]
                 item["theta"] = pca_info["angle_norm"]  # Use the normalized angle
-                
-            # Sort left-to-right (by rotated_x)
-            sorted_segments = sorted(segments_data, key=lambda x: x["rotated_x"])
-            
+
+            # Arch-order the teeth via Held-Karp shortest Hamiltonian path (matches
+            # js/geometry.js computeArchOrder exactly) instead of a plain sort by rotated_x,
+            # which breaks down wherever the arch bends back on itself - see
+            # functions/features/theta.py compute_arch_order for details.
+            order = compute_arch_order(centroids, mean_pt, angle, jaw == "upper")
+            sorted_segments = [segments_data[i] for i in order]
+
             # Extract features for each sorted segment
             for seg_idx, seg_data in enumerate(sorted_segments):
                 fdi_number = seg_data["fdi_number"]

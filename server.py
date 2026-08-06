@@ -3,8 +3,7 @@ import base64
 import importlib.util
 from pathlib import Path
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -37,39 +36,20 @@ TOOTH_MODEL_PATHS = {
     "upper": TOOTH_MODEL_DIR / "upper_best.pth"
 }
 
+# Load ToothPositionClassifier from ResNet/tooth/train.py itself (single source of truth,
+# same dynamic-import approach used for the ViT models below) instead of keeping a
+# hand-copied second definition here that could silently drift out of sync with training.
+RESNET_TOOTH_TRAIN_PATH = ROOT / "ResNet" / "tooth" / "train.py"
+_resnet_tooth_train_spec = importlib.util.spec_from_file_location("resnet_tooth_train", str(RESNET_TOOTH_TRAIN_PATH))
+_resnet_tooth_train_module = importlib.util.module_from_spec(_resnet_tooth_train_spec)
+_resnet_tooth_train_spec.loader.exec_module(_resnet_tooth_train_module)
+ToothPositionClassifier = _resnet_tooth_train_module.ToothPositionClassifier
+
+
 def build_tooth_model(num_classes=6):
-    try:
-        backbone = models.resnet18(weights=None)
-    except Exception:
-        backbone = models.resnet18()
-    num_ftrs = backbone.fc.in_features
-    backbone.fc = nn.Identity()
-
-    class ToothPositionClassifier(nn.Module):
-        def __init__(self, backbone, num_ftrs, num_classes=6):
-            super(ToothPositionClassifier, self).__init__()
-            self.resnet = backbone
-            self.meta_fc = nn.Sequential(
-                nn.Linear(5, 64),
-                nn.ReLU(),
-                nn.Linear(64, 256),
-                nn.ReLU()
-            )
-            self.classifier = nn.Sequential(
-                nn.Linear(num_ftrs + 256, 256),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, num_classes)
-            )
-
-        def forward(self, img, meta):
-            img_features = self.resnet(img)
-            meta_features = self.meta_fc(meta)
-            combined = torch.cat((img_features, meta_features), dim=1)
-            logits = self.classifier(combined)
-            return torch.softmax(logits, dim=1)
-
-    return ToothPositionClassifier(backbone, num_ftrs, num_classes)
+    # pretrained=False: every weight gets overwritten by load_state_dict right below, so
+    # fetching ImageNet-pretrained weights first would just be wasted network/disk I/O.
+    return ToothPositionClassifier(num_classes=num_classes, pretrained=False)
 
 
 tooth_models = {}

@@ -29,7 +29,16 @@
       "Bash(python -m py_compile functions/graph/complexity.py)",
       "Bash(python -m py_compile functions/graph/complexity.py js/api.js)",
       "Bash(python -c \"from sklearn.metrics import average_precision_score; from sklearn.preprocessing import label_binarize; print\\('OK'\\)\")",
-      "Bash(echo \"exit code: $?\")"
+      "Bash(echo \"exit code: $?\")",
+      "Bash(python -m py_compile ViT/complexity/train.py)",
+      "Bash(python -m py_compile ResNet/tooth/train.py)",
+      "Bash(python -m py_compile ViT/arch/train.py)",
+      "Bash(wmic process *)",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\e603c6fd-df60-4623-8bcb-50b9efaf1de4\\\\scratchpad\\\\check_csv_ordering.py\")",
+      "Bash(.venv/Scripts/python.exe \"C:\\\\Users\\\\chnyon\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-chnyon-Desktop-lab-WORK-2026-1-CHAI-CHAI\\\\e603c6fd-df60-4623-8bcb-50b9efaf1de4\\\\scratchpad\\\\test_ordering_fix.py\")",
+      "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id,StartTime,CPU\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m py_compile server.py)"
     ]
   }
 }

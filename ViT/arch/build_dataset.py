@@ -110,7 +110,7 @@ def load_resnet(jaw, model_dir, device):
     weights_path = Path(model_dir) / f"{jaw}_best.pth"
     if not weights_path.exists():
         raise FileNotFoundError(f"ResNet weights not found: {weights_path}")
-    model = ToothPositionClassifier(num_classes=6)
+    model = ToothPositionClassifier(num_classes=6, pretrained=False)
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.to(device)
     model.eval()

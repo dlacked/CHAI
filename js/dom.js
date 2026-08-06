@@ -11,7 +11,6 @@ const jawCb = document.getElementById('jaw-classification-checkbox');
 const yoloCb = document.getElementById('yolov8-seg-checkbox');
 const pcaCb = document.getElementById('pca-checkbox');
 const archPathCb = document.getElementById('arch-path-checkbox');
-const gapCb = document.getElementById('gap-checkbox');
 const fdiCb = document.getElementById('fdi-checkbox');
 const palmerCb = document.getElementById('palmer-checkbox');
 

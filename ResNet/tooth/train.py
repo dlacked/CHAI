@@ -128,16 +128,22 @@ class ToothDataset(Dataset):
         return img_tensor, meta, target_label
 
 class ToothPositionClassifier(nn.Module):
-    def __init__(self, num_classes=6):
+    def __init__(self, num_classes=6, pretrained=True):
         super(ToothPositionClassifier, self).__init__()
-        # Pretrained ResNet18 Backbone
-        try:
-            self.resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-            print("Pretrained ResNet18 weights loaded.")
-        except (ImportError, AttributeError):
-            self.resnet = models.resnet18(pretrained=True)
-            print("Pretrained ResNet18 weights loaded (legacy).")
-            
+        # ImageNet-pretrained backbone for training from scratch. Inference-only callers (e.g.
+        # server.py, which immediately overwrites every weight via load_state_dict) should pass
+        # pretrained=False to skip this fetch entirely - it's wasted network/disk I/O when the
+        # weights are about to be discarded anyway.
+        if not pretrained:
+            self.resnet = models.resnet18(weights=None)
+        else:
+            try:
+                self.resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+                print("Pretrained ResNet18 weights loaded.")
+            except (ImportError, AttributeError):
+                self.resnet = models.resnet18(pretrained=True)
+                print("Pretrained ResNet18 weights loaded (legacy).")
+
         num_ftrs = self.resnet.fc.in_features
         self.resnet.fc = nn.Identity()  # Remove classifier head
         
@@ -219,7 +225,6 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     best_acc = 0.0
-    best_val_loss = float('inf')
     epochs_no_improve = 0
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -301,21 +306,19 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
               f"Train Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} F1: {epoch_f1:.4f} | "
               f"Val Loss: {val_epoch_loss:.4f} Acc: {val_epoch_acc:.4f} F1: {val_epoch_f1:.4f}")
               
-        # Save best weights
-        if val_epoch_acc >= best_acc:
+        # Save-best and early-stopping both track validation accuracy - the metric the saved
+        # checkpoint is actually judged on - so the two log lines below can never contradict
+        # each other the way they could when one tracked accuracy and the other tracked loss.
+        if val_epoch_acc > best_acc:
             best_acc = val_epoch_acc
             torch.save(model.state_dict(), model_save_path)
             print(f"  --> Saved new best model to {model_save_path} (Val Acc: {best_acc:.4f})")
-
-        # Early stopping based on validation loss
-        if val_epoch_loss < best_val_loss:
-            best_val_loss = val_epoch_loss
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            print(f"  --> No improvement in Val Loss for {epochs_no_improve}/{patience} epochs.")
+            print(f"  --> No improvement in Val Accuracy for {epochs_no_improve}/{patience} epochs.")
             if epochs_no_improve >= patience:
-                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Loss improvement for {patience} epochs).")
+                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Accuracy improvement for {patience} epochs).")
                 break
 
     print(f"\nTraining completed. Best Validation Accuracy: {best_acc:.4f}")

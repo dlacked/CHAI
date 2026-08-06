@@ -121,25 +121,22 @@ const updateCheckboxStates = () => {
             yoloCb.disabled = true;
         }
 
-        jawCb.checked = yoloCb.checked;
-        jawCb.disabled = true;
-
-        pcaCb.checked = jawCb.checked;
+        pcaCb.checked = yoloCb.checked;
         pcaCb.disabled = true;
 
-        archPathCb.checked = pcaCb.checked;
-        archPathCb.disabled = true;
+        jawCb.checked = pcaCb.checked;
+        jawCb.disabled = true;
 
-        gapCb.checked = archPathCb.checked;
-        gapCb.disabled = true;
+        archPathCb.checked = jawCb.checked;
+        archPathCb.disabled = true;
 
         // Unlike the stages above, FDI vs Palmer is a display-mode *choice*, not a pipeline
         // dependency, so Select All forces some notation on (defaulting to FDI the first time)
         // but leaves both radios enabled - the user can still switch between them.
-        if (gapCb.checked && !fdiCb.checked && !palmerCb.checked) {
+        if (archPathCb.checked && !fdiCb.checked && !palmerCb.checked) {
             fdiCb.checked = true;
         }
-        const notationOn = gapCb.checked;
+        const notationOn = archPathCb.checked;
         fdiCb.disabled = !notationOn;
         palmerCb.disabled = !notationOn;
         if (!notationOn) {
@@ -150,29 +147,22 @@ const updateCheckboxStates = () => {
         return;
     }
 
-    jawCb.disabled = !yoloCb.checked;
+    pcaCb.disabled = !yoloCb.checked;
+    if (pcaCb.disabled) pcaCb.checked = false;
+
+    jawCb.disabled = !pcaCb.checked;
     if (jawCb.disabled) {
         jawCb.checked = false;
     }
 
-    pcaCb.disabled = !jawCb.checked;
-    if (pcaCb.disabled) pcaCb.checked = false;
-
-    // Arch Path is enabled when PCA is checked
-    archPathCb.disabled = !pcaCb.checked;
+    // Arch Path is enabled when Jaw Classification is checked
+    archPathCb.disabled = !jawCb.checked;
     if (archPathCb.disabled) {
         archPathCb.checked = false;
     }
 
-    // Segment Gap is enabled when Arch Path is checked. With exactly 12 teeth detected there's
-    // nothing to show (no possible gaps), but the checkbox itself stays checkable regardless.
-    gapCb.disabled = !archPathCb.checked;
-    if (gapCb.disabled) {
-        gapCb.checked = false;
-    }
-
-    // FDI/Palmer notation choice is enabled when Segment Gap is checked
-    const notationDisabled = !gapCb.checked;
+    // FDI/Palmer notation choice is enabled when Arch Path is checked
+    const notationDisabled = !archPathCb.checked;
     fdiCb.disabled = notationDisabled;
     palmerCb.disabled = notationDisabled;
     if (notationDisabled) {
@@ -214,11 +204,6 @@ pcaCb.addEventListener('change', () => {
 });
 
 archPathCb.addEventListener('change', () => {
-    updateCheckboxStates();
-    redrawCanvas();
-});
-
-gapCb.addEventListener('change', () => {
     updateCheckboxStates();
     redrawCanvas();
 });

@@ -28,6 +28,9 @@ def flatten_valid(logits, targets):
     return logits_flat[valid], targets_flat[valid]
 
 
+GRAD_CLIP_MAX_NORM = 1.0
+
+
 def run_epoch(model, loader, device, criterion, optimizer=None):
     train_mode = optimizer is not None
     model.train() if train_mode else model.eval()
@@ -53,6 +56,7 @@ def run_epoch(model, loader, device, criterion, optimizer=None):
 
             if train_mode:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_MAX_NORM)
                 optimizer.step()
 
             n = target_flat.size(0)
@@ -97,9 +101,12 @@ def train_model(jaw, cache_dir, model_save_path, runs_dir, epochs, batch_size, l
     model = ArchToothTransformer(num_classes=6).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    # Val loss oscillates once the model is near convergence at a fixed lr - halving it after a
+    # few stagnant epochs (patience shorter than early-stopping's) damps that before training
+    # gives up entirely.
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     best_acc = 0.0
-    best_val_loss = float('inf')
     epochs_no_improve = 0
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -114,23 +121,30 @@ def train_model(jaw, cache_dir, model_save_path, runs_dir, epochs, batch_size, l
         train_accs.append(train_acc); val_accs.append(val_acc)
         train_f1s.append(train_f1); val_f1s.append(val_f1)
 
+        lr_before = optimizer.param_groups[0]['lr']
+        scheduler.step(val_loss)
+        lr_after = optimizer.param_groups[0]['lr']
+        if lr_after < lr_before:
+            print(f"  --> Val loss plateaued; reducing LR {lr_before:.2e} -> {lr_after:.2e}")
+
         print(f"Epoch {epoch+1}/{epochs} | "
               f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} F1: {train_f1:.4f} | "
-              f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} F1: {val_f1:.4f}")
+              f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} F1: {val_f1:.4f} | "
+              f"LR: {lr_after:.2e}")
 
-        if val_acc >= best_acc:
+        # Save-best and early-stopping both track validation accuracy - the metric the saved
+        # checkpoint is actually judged on - so the two log lines below can never contradict
+        # each other the way they could when one tracked accuracy and the other tracked loss.
+        if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), model_save_path)
             print(f"  --> Saved new best model to {model_save_path} (Val Acc: {best_acc:.4f})")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            print(f"  --> No improvement in Val Loss for {epochs_no_improve}/{patience} epochs.")
+            print(f"  --> No improvement in Val Accuracy for {epochs_no_improve}/{patience} epochs.")
             if epochs_no_improve >= patience:
-                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Loss improvement for {patience} epochs).")
+                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Accuracy improvement for {patience} epochs).")
                 break
 
     print(f"\nTraining completed. Best Validation Accuracy: {best_acc:.4f}")

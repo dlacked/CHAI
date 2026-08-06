@@ -117,7 +117,6 @@ def train_model(jaw, cache_dir, model_save_path, runs_dir, epochs, batch_size, l
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     best_acc = 0.0
-    best_val_loss = float('inf')
     epochs_no_improve = 0
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -136,19 +135,19 @@ def train_model(jaw, cache_dir, model_save_path, runs_dir, epochs, batch_size, l
               f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} F1: {train_f1:.4f} | "
               f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} F1: {val_f1:.4f}")
 
-        if val_acc >= best_acc:
+        # Save-best and early-stopping both track validation accuracy - the metric the saved
+        # checkpoint is actually judged on - so the two log lines below can never contradict
+        # each other the way they could when one tracked accuracy and the other tracked loss.
+        if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), model_save_path)
             print(f"  --> Saved new best model to {model_save_path} (Val Acc: {best_acc:.4f})")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            print(f"  --> No improvement in Val Loss for {epochs_no_improve}/{patience} epochs.")
+            print(f"  --> No improvement in Val Accuracy for {epochs_no_improve}/{patience} epochs.")
             if epochs_no_improve >= patience:
-                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Loss improvement for {patience} epochs).")
+                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Accuracy improvement for {patience} epochs).")
                 break
 
     print(f"\nTraining completed. Best Validation Accuracy: {best_acc:.4f}")
