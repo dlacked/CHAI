@@ -17,7 +17,9 @@ const vizHeldKarpRadio = document.getElementById('viz-heldkarp-radio');
 const vizMirroringRadio = document.getElementById('viz-mirroring-radio');
 const getVizMode = () => {
     if (vizSegmentationRadio.checked) return 'segmentation';
-    if (vizHeldKarpRadio.checked) return 'heldkarp';
+    // vizHeldKarpRadio has no matching UI control anymore (index.html) - its radio-mode branch
+    // in render.js is kept working (drawHeldKarpOrder etc.), just unreachable from the UI now.
+    if (vizHeldKarpRadio && vizHeldKarpRadio.checked) return 'heldkarp';
     if (vizMirroringRadio.checked) return 'mirroring';
     return 'off';
 };

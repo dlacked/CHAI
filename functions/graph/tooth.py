@@ -62,15 +62,20 @@ GRID = "#e1e0d9"
 SURFACE = "#fcfcfb"
 
 # The five prediction sources evaluate_tooth_number() computes, in comparison-chart order:
-# (key, display label, per-tooth hard-label field, per-tooth probability field). AUC for the
-# three post-process methods is scored against `prob_resnet` (see compute_method_comparison's
-# docstring for why that's correct, not an oversight).
+# (key, display label, per-tooth hard-label field, per-tooth probability field, per-tooth tens-
+# prediction field). AUC for the three post-process methods is scored against `prob_resnet` (see
+# compute_method_comparison's docstring for why that's correct, not an oversight).
+# resnet_hungarian uniquely gets its own tens field (y_tens_pred_hungarian): it resolves digits
+# arch-wide before touching quadrant/tens at all (resolve_arch_duplicates), then reads the tens
+# boundary off where a digit repeats (correct_mirrors_by_digit_occurrence) - see
+# evaluate_tooth_number - so it has a materially better tens guess than the shared geometry-only
+# one (y_tens_pred) every other method here is stuck with.
 METHODS = [
-    ("resnet_only", "ResNet-only", "y_resnet", "prob_resnet"),
-    ("resnet_vit", "ResNet+ViT", "y_vit", "prob_vit"),
-    ("resnet_hungarian", "ResNet+Hungarian", "y_postproc", "prob_resnet"),
-    ("resnet_monodp", "ResNet+Monotonic-DP", "y_monodp", "prob_resnet"),
-    ("resnet_greedy", "ResNet+Greedy", "y_greedy", "prob_resnet"),
+    ("resnet_only", "ResNet-only", "y_resnet", "prob_resnet", "y_tens_pred"),
+    ("resnet_vit", "ResNet+ViT", "y_vit", "prob_vit", "y_tens_pred"),
+    ("resnet_hungarian", "ResNet+Hungarian", "y_postproc", "prob_resnet", "y_tens_pred_hungarian"),
+    ("resnet_monodp", "ResNet+Monotonic-DP", "y_monodp", "prob_resnet", "y_tens_pred"),
+    ("resnet_greedy", "ResNet+Greedy", "y_greedy", "prob_resnet", "y_tens_pred"),
 ]
 METHOD_COLORS = {
     "resnet_only": BLUE, "resnet_vit": ORANGE, "resnet_hungarian": PURPLE,
@@ -153,6 +158,98 @@ def plot_metrics_by_number(metrics_by_number, title, out_path):
     plt.close()
 
 
+# Sentinel "digit" for a tooth whose predicted FDI *tens* digit was wrong (see
+# compute_tens_predictions / gate_by_tens) - distinct from any real last-digit class (0-5), so a
+# quadrant-assignment miss shows up as its own bucket instead of being silently absorbed into
+# whichever last digit the model happened to guess (or, the opposite failure mode, silently
+# scored as "correct" just because the last digit matched while the tooth was attributed to the
+# wrong tooth position entirely).
+WRONG_QUADRANT = 6
+DIGIT_DISPLAY_LABELS = ["1", "2", "3", "4", "5", "6", "Wrong\nQuadrant"]
+
+
+def gate_by_tens(y_pred, y_tens_pred, y_fdi_number):
+    """Replaces a predicted digit with the WRONG_QUADRANT sentinel wherever this tooth's
+    predicted FDI tens digit (y_tens_pred) didn't match the true one (y_fdi_number // 10). Every
+    accuracy/F1/confusion-matrix view in this module scores against the gated prediction, not
+    the raw digit, because a wrong quadrant makes the FDI number wrong even if the model's last
+    digit was correct - previously that case was invisibly scored as a hit (see
+    compute_tens_predictions's docstring for the actual bug this exposed).
+
+    Takes the tens prediction as an explicit argument rather than a precomputed correctness
+    array because different methods can have different tens predictions - resnet_hungarian's
+    (see evaluate_tooth_number) is resolved from its own already-deduplicated digits via
+    correct_mirrors_by_digit_occurrence, not the shared geometry-only guess every other method
+    uses, so gating it against the plain geometric guess would understate how often it's
+    actually right."""
+    return [p if tp == (n // 10) else WRONG_QUADRANT
+            for p, tp, n in zip(y_pred, y_tens_pred, y_fdi_number)]
+
+
+def compute_tens_predictions(dataset_dir, jaw, split):
+    """Replicates production's actual (geometry-only) FDI tens-digit assignment - js/geometry.js
+    computeToothMeta/computeQuadrantTens: PCA over every detected tooth centroid in the arch,
+    then each tooth's own rotated-x sign decides its quadrant. The last digit is the only thing
+    the model predicts; the tens digit has always come from this geometric step, both in
+    production and, silently, in every eval chart in this module up to now - which used the
+    *ground-truth* tens digit instead, i.e. assumed this geometric step is always correct. It
+    isn't: a missing tooth skews the PCA-estimated midline, and the tooth most exposed to that
+    skew is exactly the one closest to it (a digit-"1" tooth) - see project notes for a live
+    example (a real 41 and 31 both reading as "31"). This function exists so that failure mode
+    is actually visible in these graphs instead of being invisibly assumed away.
+
+    Returns {(image_name, fdi_number): predicted_tens}.
+    """
+    theta_module = load_module("features_theta", PROJECT_ROOT / "functions" / "features" / "theta.py")
+    calculate_pca_rotation = theta_module.calculate_pca_rotation
+
+    image_exts = [".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG", ".webp"]
+    json_dir = Path(dataset_dir) / split / "labels_json" / jaw
+    image_dir = Path(dataset_dir) / split / "images" / jaw
+
+    result = {}
+    for json_path in sorted(json_dir.glob("*.json")):
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        segs = []
+        for t in data.get("tooth", []):
+            num = t.get("teeth_num")
+            seg = t.get("segmentation", [])
+            if num is None or not seg:
+                continue
+            poly = seg if (isinstance(seg[0], list) and len(seg[0]) == 2) else \
+                [[seg[i], seg[i + 1]] for i in range(0, len(seg), 2)]
+            cx = sum(p[0] for p in poly) / len(poly)
+            cy = sum(p[1] for p in poly) / len(poly)
+            segs.append((num, cx, cy))
+        if len(segs) < 2:
+            continue
+
+        centroids = [(cx, cy) for _, cx, cy in segs]
+        mean_pt, angle = calculate_pca_rotation(centroids)
+        cos_a, sin_a = np.cos(-angle), np.sin(-angle)
+
+        image_name = None
+        for ext in image_exts:
+            if (image_dir / f"{json_path.stem}{ext}").exists():
+                image_name = f"{json_path.stem}{ext}"
+                break
+        if image_name is None:
+            continue
+
+        for num, cx, cy in segs:
+            rx = (cx - mean_pt[0]) * cos_a - (cy - mean_pt[1]) * sin_a
+            mirrored = rx >= 0
+            if jaw == "upper":
+                tens = 2 if mirrored else 1
+            else:
+                tens = 3 if mirrored else 4
+            result[(image_name, num)] = tens
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Tooth number (FDI last digit) performance - ResNet-only vs ResNet+Hungarian
 # ---------------------------------------------------------------------------
@@ -191,8 +288,14 @@ def evaluate_tooth_number():
                       production (see ViT/arch/model.py) - kept only for this comparison, not
                       used anywhere else anymore (see ResNet/tooth/postprocess.py's docstring
                       for why it was retired in favor of the Hungarian post-process below).
-      - y_postproc  : ResNet + per-quadrant Hungarian duplicate resolution - today's actual
-                      production pipeline (server.py /tooth_predict).
+      - y_postproc  : ResNet + arch-wide Hungarian digit resolution, tens read off afterward by
+                      digit-pairing - today's actual production pipeline (server.py
+                      /tooth_predict). Digits first, tens second (resolve_arch_duplicates then
+                      correct_mirrors_by_digit_occurrence) rather than the other three post-
+                      processes' quadrant-first order, specifically because grouping by a
+                      possibly-wrong tens guess *before* resolving digits let a bad quadrant
+                      call corrupt an already-correct neighboring tooth's digit too - see project
+                      notes for a caught example (a correct "1" reassigned to "5" this way).
       - y_monodp    : ResNet + the stricter monotonic-order DP - a comparison point, not used in
                       production (see resolve_quadrant_monotonic's docstring for why it lost).
       - y_greedy    : ResNet + greedy confidence-first duplicate resolution - a second,
@@ -216,6 +319,11 @@ def evaluate_tooth_number():
         print(f"\nBuilding {jaw}/test arch sequences (ResNet forward pass)...")
         sequences = arch_build.build_split(jaw, "test", str(DATASET_DIR), str(CSV_DIR), str(RESNET_MODEL_DIR), device)
         fdi_number_lists = load_fdi_numbers_per_arch(csv_path)
+        # Production's actual (geometry-only, occasionally wrong) tens-digit guess - used below
+        # both to gate correctness (gate_by_tens) and, faithfully to production, as the grouping
+        # key the quadrant-dedup post-processes (Hungarian etc.) actually see - not the GT tens,
+        # which would hand them cleaner groups than production ever gets.
+        tens_pred_map = compute_tens_predictions(str(DATASET_DIR), jaw, "test")
 
         arch_weights = ARCH_MODEL_DIR / f"{jaw}_best.pth"
         arch_model = None
@@ -230,6 +338,7 @@ def evaluate_tooth_number():
 
         y_true, y_fdi_number, y_image_name = [], [], []
         y_resnet, y_vit, y_postproc, y_monodp, y_greedy = [], [], [], [], []
+        y_tens_pred, y_tens_pred_hungarian = [], []
         prob_resnet, prob_vit = [], []
         with torch.no_grad():
             for seq, fdi_numbers in zip(sequences, fdi_number_lists):
@@ -242,6 +351,12 @@ def evaluate_tooth_number():
                 y_image_name.extend([seq["image_name"]] * len(target))
                 y_resnet.extend(torch.argmax(prob_vec, dim=1).tolist())
                 prob_resnet.extend(probs_np.tolist())
+
+                # Falls back to the true tens digit (i.e. assumes correct) only for the rare
+                # tooth compute_tens_predictions has no geometry for (e.g. a single-tooth arch,
+                # where PCA over one point is degenerate) - never silently drops a tooth.
+                tens_pred = [tens_pred_map.get((seq["image_name"], n), n // 10) for n in fdi_numbers]
+                y_tens_pred.extend(tens_pred)
 
                 if arch_model is not None:
                     k = prob_vec.size(0)
@@ -259,20 +374,39 @@ def evaluate_tooth_number():
                     y_vit.extend(torch.argmax(prob_vec, dim=1).tolist())
                     prob_vit.extend(probs_np.tolist())
 
-                # Quadrant grouping for every eval-side post-process uses the GT FDI tens digit
-                # (contiguous runs of teeth sharing a quadrant) - equivalent to production's
-                # geometry-derived `mirror` flag (server.py /tooth_predict), just sourced from
-                # GT since that's already on hand here and this is scoring, not inference.
-                tens_keys = [n // 10 for n in fdi_numbers]
-                y_postproc.extend(postprocess.resolve_quadrant_duplicates(probs_np, tens_keys).tolist())
-                y_monodp.extend(postprocess.resolve_quadrant_monotonic(probs_np, tens_keys).tolist())
-                y_greedy.extend(postprocess.resolve_quadrant_greedy(probs_np, tens_keys).tolist())
+                # Production Hungarian (y_postproc): resolve digits arch-wide FIRST, with no
+                # quadrant/tens information at all (resolve_arch_duplicates), then read the tens
+                # boundary off wherever a digit repeats (correct_mirrors_by_digit_occurrence),
+                # falling back to the geometry-only guess (tens_pred) only for a digit that
+                # appears just once. See evaluate_tooth_number's docstring for why this order -
+                # doing it the other way (quadrant-group first, like the two comparison post-
+                # processes below still do) lets a bad quadrant call corrupt an already-correct
+                # neighboring tooth's digit too.
+                resolved_digits = postprocess.resolve_arch_duplicates(probs_np)
+                initial_mirrors = [tp in (2, 3) for tp in tens_pred]
+                corrected_mirrors = postprocess.correct_mirrors_by_digit_occurrence(
+                    resolved_digits.tolist(), initial_mirrors
+                )
+                if jaw == "upper":
+                    tens_hungarian = [2 if m else 1 for m in corrected_mirrors]
+                else:
+                    tens_hungarian = [3 if m else 4 for m in corrected_mirrors]
+                y_postproc.extend(resolved_digits.tolist())
+                y_tens_pred_hungarian.extend(tens_hungarian)
+
+                # Comparison-only post-processes (not production): still quadrant-group first,
+                # by the same geometry-only tens_pred production's OLD approach used - kept as-is
+                # so the difference above is actually visible in the method comparison, not
+                # quietly fixed everywhere at once.
+                y_monodp.extend(postprocess.resolve_quadrant_monotonic(probs_np, tens_pred).tolist())
+                y_greedy.extend(postprocess.resolve_quadrant_greedy(probs_np, tens_pred).tolist())
 
         per_jaw[jaw] = {
             "y_true": y_true,
             "y_resnet": y_resnet, "y_vit": y_vit, "y_postproc": y_postproc,
             "y_monodp": y_monodp, "y_greedy": y_greedy,
             "prob_resnet": prob_resnet, "prob_vit": prob_vit,
+            "y_tens_pred": y_tens_pred, "y_tens_pred_hungarian": y_tens_pred_hungarian,
             "y_fdi_number": y_fdi_number, "y_image_name": y_image_name,
             "n_arches": len(sequences), "n_teeth": len(y_true),
         }
@@ -281,17 +415,24 @@ def evaluate_tooth_number():
     return per_jaw
 
 
-def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template):
+def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template, tens_pred_key="y_tens_pred"):
     """Plots one confusion matrix per jaw for a single prediction source (pred_key is
     'y_resnet' for the ResNet-only baseline or 'y_postproc' for the pipeline's final,
     Hungarian-corrected output - both are already collected per-tooth in
     evaluate_tooth_number(), just not both plotted before). Called twice from main() so the two
-    are directly comparable side by side."""
-    display_labels = ["1", "2", "3", "4", "5", "6"]
+    are directly comparable side by side.
+
+    Gated by gate_by_tens before plotting - a tooth whose predicted FDI tens digit was wrong gets
+    its digit prediction replaced with the WRONG_QUADRANT sentinel rather than scored against
+    whatever digit the model happened to guess, so a wrong-quadrant miss shows up as its own
+    column instead of silently landing on the diagonal (if the digit also happened to match) or
+    polluting genuine digit-vs-digit confusion (if it didn't). tens_pred_key picks which tens
+    prediction to gate against - resnet_hungarian gets its own, better one (see METHODS)."""
     for jaw, data in per_jaw.items():
-        cm = confusion_matrix(data["y_true"], data[pred_key], labels=list(range(6)))
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=display_labels)
-        fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+        gated_pred = gate_by_tens(data[pred_key], data[tens_pred_key], data["y_fdi_number"])
+        cm = confusion_matrix(data["y_true"], gated_pred, labels=list(range(7)))
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DIGIT_DISPLAY_LABELS)
+        fig, ax = plt.subplots(figsize=(7, 6), facecolor=SURFACE)
         disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
         ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({label})", color=INK)
         plt.tight_layout()
@@ -300,22 +441,28 @@ def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template):
         plt.close()
 
 
-def compute_tooth_number_metrics(per_jaw, pred_key):
+def compute_tooth_number_metrics(per_jaw, pred_key, tens_pred_key="y_tens_pred"):
     """F1 (macro, primary)/accuracy/precision/recall over the 6 last-digit classes for one
     prediction source (pred_key: 'y_resnet' for the ResNet-only baseline, 'y_postproc' for the
     pipeline's final Hungarian-corrected output) against the GT last digit, pooled across both
-    jaws."""
+    jaws. Gated by gate_by_tens - a tooth only counts as correct if BOTH its predicted last digit
+    and its predicted FDI tens digit (tens_pred_key - production's geometry-only guess for most
+    methods, resnet_hungarian's own better one for that method, see METHODS) match;
+    `labels=range(6)` on the macro metrics keeps the WRONG_QUADRANT sentinel out of the per-class
+    average itself while still letting it correctly zero out that instance's contribution to its
+    true class's recall."""
     all_true, all_pred = [], []
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
         all_true += d["y_true"]
-        all_pred += d[pred_key]
+        all_pred += gate_by_tens(d[pred_key], d[tens_pred_key], d["y_fdi_number"])
 
+    digit_labels = list(range(6))
     return {
-        "f1": f1_score(all_true, all_pred, average="macro", zero_division=0),
+        "f1": f1_score(all_true, all_pred, labels=digit_labels, average="macro", zero_division=0),
         "accuracy": accuracy_score(all_true, all_pred),
-        "precision": precision_score(all_true, all_pred, average="macro", zero_division=0),
-        "recall": recall_score(all_true, all_pred, average="macro", zero_division=0),
+        "precision": precision_score(all_true, all_pred, labels=digit_labels, average="macro", zero_division=0),
+        "recall": recall_score(all_true, all_pred, labels=digit_labels, average="macro", zero_division=0),
     }
 
 
@@ -333,22 +480,36 @@ def compute_method_comparison(per_jaw):
     model's confidence estimates, only its final hard decision - accuracy and F1 (which DO differ
     across them, since they act on the hard label) are the metrics that actually show each
     post-process's effect.
+
+    Accuracy/F1 are gated by gate_by_tens (see compute_tooth_number_metrics) - a method only gets
+    credit when the predicted FDI tens digit was also right, using each method's own tens
+    prediction field (METHODS - resnet_hungarian's is materially better than the shared
+    geometry-only one every other method here uses). AUC is left ungated: it scores the ResNet
+    softmax's ranking quality for the 6 digit classes the model was actually trained on, which
+    the (geometry-only, model-independent) tens digit has no bearing on - gating it would just
+    make every method's AUC dip by the same tens-error rate without reflecting anything about the
+    classifier itself.
     """
     results = {}
     for series in ("lower", "upper", "pooled"):
         if series == "pooled":
             y_true = per_jaw["lower"]["y_true"] + per_jaw["upper"]["y_true"]
+            y_fdi_number = per_jaw["lower"]["y_fdi_number"] + per_jaw["upper"]["y_fdi_number"]
         else:
             y_true = per_jaw[series]["y_true"]
+            y_fdi_number = per_jaw[series]["y_fdi_number"]
 
         series_result = {}
-        for key, label, pred_field, prob_field in METHODS:
+        for key, label, pred_field, prob_field, tens_pred_field in METHODS:
             if series == "pooled":
                 y_pred = per_jaw["lower"][pred_field] + per_jaw["upper"][pred_field]
                 y_prob = per_jaw["lower"][prob_field] + per_jaw["upper"][prob_field]
+                y_tens_pred = per_jaw["lower"][tens_pred_field] + per_jaw["upper"][tens_pred_field]
             else:
                 y_pred = per_jaw[series][pred_field]
                 y_prob = per_jaw[series][prob_field]
+                y_tens_pred = per_jaw[series][tens_pred_field]
+            y_pred_gated = gate_by_tens(y_pred, y_tens_pred, y_fdi_number)
 
             try:
                 auc = roc_auc_score(y_true, np.array(y_prob), multi_class="ovr",
@@ -358,8 +519,8 @@ def compute_method_comparison(per_jaw):
 
             series_result[key] = {
                 "label": label,
-                "accuracy": accuracy_score(y_true, y_pred),
-                "f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
+                "accuracy": accuracy_score(y_true, y_pred_gated),
+                "f1": f1_score(y_true, y_pred_gated, labels=list(range(6)), average="macro", zero_division=0),
                 "auc": auc,
             }
         results[series] = series_result
@@ -400,24 +561,27 @@ def plot_method_comparison(comparison, title, out_path):
     plt.close()
 
 
-def reconstruct_fdi_predictions(per_jaw, pred_key="y_postproc"):
-    """Reconstructs a full predicted FDI number as known_tens*10 + predicted_digit (tens comes
-    from the tooth's own geometry, exactly like the live site's computeQuadrantTens - the model
-    only ever predicts the last digit), pooled across both jaws. Shared by
+def reconstruct_fdi_predictions(per_jaw, pred_key="y_postproc", tens_pred_key="y_tens_pred_hungarian"):
+    """Reconstructs a full predicted FDI number as predicted_tens*10 + predicted_digit - tens
+    from tens_pred_key (production's actual tens guess for this prediction source - see METHODS
+    for why resnet_hungarian gets its own field), NOT the ground truth, so a wrong-quadrant tooth
+    reconstructs to whatever wrong FDI number production would actually have shown (e.g. true 41
+    landing on predicted-tens 3 becomes "31", genuinely confusable with a true 31 tooth) instead
+    of always resolving to the true quadrant. Pooled across both jaws. Shared by
     compute_tooth_number_metrics_by_number and plot_tooth_number_confusion_by_fdi so the
     reconstruction logic (and which prediction source it's built from) can't drift between the
     two."""
     all_true_fdi, all_pred_fdi = [], []
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
-        for pred_digit, fdi_number in zip(d[pred_key], d["y_fdi_number"]):
-            tens = fdi_number // 10
+        for pred_digit, tens_pred, fdi_number in zip(d[pred_key], d[tens_pred_key], d["y_fdi_number"]):
             all_true_fdi.append(fdi_number)
-            all_pred_fdi.append(tens * 10 + (pred_digit + 1))
+            all_pred_fdi.append(tens_pred * 10 + (pred_digit + 1))
     return all_true_fdi, all_pred_fdi
 
 
-def plot_tooth_number_confusion_by_fdi(per_jaw, title, out_path, pred_key="y_postproc"):
+def plot_tooth_number_confusion_by_fdi(per_jaw, title, out_path, pred_key="y_postproc",
+                                        tens_pred_key="y_tens_pred_hungarian"):
     """Full multiclass confusion matrix over actual FDI numbers (11-46, digits 1-6 only - the
     6-class model was never trained on the 7/8 wisdom-tooth digits) for the pipeline's final
     prediction, reconstructed the same way compute_tooth_number_metrics_by_number's per-number
@@ -425,7 +589,7 @@ def plot_tooth_number_confusion_by_fdi(per_jaw, title, out_path, pred_key="y_pos
     which OTHER number a miss gets confused with (e.g. is 14 mistaken for 13 or for 15?),
     not just that 14's own hit-rate dropped."""
     fdi_labels = [n for n in ALL_FDI_NUMBERS if 1 <= n % 10 <= 6]
-    all_true_fdi, all_pred_fdi = reconstruct_fdi_predictions(per_jaw, pred_key)
+    all_true_fdi, all_pred_fdi = reconstruct_fdi_predictions(per_jaw, pred_key, tens_pred_key)
 
     cm = confusion_matrix(all_true_fdi, all_pred_fdi, labels=fdi_labels)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[str(n) for n in fdi_labels])
@@ -473,6 +637,27 @@ def main():
     print("=" * 70)
     per_jaw = evaluate_tooth_number()
 
+    def tens_accuracy_of(tens_pred_key):
+        acc = {}
+        for jaw in ("lower", "upper"):
+            tp = per_jaw[jaw][tens_pred_key]
+            fn = per_jaw[jaw]["y_fdi_number"]
+            correct = [t == (n // 10) for t, n in zip(tp, fn)]
+            acc[jaw] = sum(correct) / len(correct) if correct else 0.0
+        all_tp = per_jaw["lower"][tens_pred_key] + per_jaw["upper"][tens_pred_key]
+        all_fn = per_jaw["lower"]["y_fdi_number"] + per_jaw["upper"]["y_fdi_number"]
+        all_correct = [t == (n // 10) for t, n in zip(all_tp, all_fn)]
+        acc["pooled"] = sum(all_correct) / len(all_correct) if all_correct else 0.0
+        return acc
+
+    tens_accuracy = tens_accuracy_of("y_tens_pred")
+    tens_accuracy_hungarian = tens_accuracy_of("y_tens_pred_hungarian")
+    print("FDI tens-digit (quadrant) accuracy - geometry-only guess vs. ResNet+Hungarian's own "
+          "(digit-pairing-corrected, see evaluate_tooth_number):")
+    for series in ("lower", "upper", "pooled"):
+        print(f"  {series}: geometry-only={tens_accuracy[series]:.4f}  "
+              f"resnet_hungarian={tens_accuracy_hungarian[series]:.4f}")
+
     # ResNet-only baseline vs the pipeline's final ResNet+Hungarian output, plotted and scored
     # separately so the post-process's effect is directly visible (both predictions were already
     # collected per-tooth in evaluate_tooth_number(), just not both surfaced before).
@@ -480,11 +665,12 @@ def main():
         per_jaw, "y_resnet", "ResNet-only", RESULTS_DIR / "tooth_number_confusion_resnet_{jaw}.png"
     )
     plot_tooth_number_confusion(
-        per_jaw, "y_postproc", "ResNet+Hungarian", RESULTS_DIR / "tooth_number_confusion_hungarian_{jaw}.png"
+        per_jaw, "y_postproc", "ResNet+Hungarian", RESULTS_DIR / "tooth_number_confusion_hungarian_{jaw}.png",
+        tens_pred_key="y_tens_pred_hungarian"
     )
 
     resnet_metrics = compute_tooth_number_metrics(per_jaw, "y_resnet")
-    hungarian_metrics = compute_tooth_number_metrics(per_jaw, "y_postproc")
+    hungarian_metrics = compute_tooth_number_metrics(per_jaw, "y_postproc", tens_pred_key="y_tens_pred_hungarian")
     print(f"ResNet-only:      F1={resnet_metrics['f1']:.4f}  Accuracy={resnet_metrics['accuracy']:.4f}")
     print(f"ResNet+Hungarian: F1={hungarian_metrics['f1']:.4f}  Accuracy={hungarian_metrics['accuracy']:.4f}")
     plot_metric_bars(
@@ -525,8 +711,10 @@ def main():
     )
 
     per_tooth_keys = ("y_true", "y_resnet", "y_vit", "y_postproc", "y_monodp", "y_greedy",
-                       "prob_resnet", "prob_vit", "y_fdi_number", "y_image_name")
+                       "prob_resnet", "prob_vit", "y_tens_pred",
+                       "y_tens_pred_hungarian", "y_fdi_number", "y_image_name")
     summary["tooth_number"] = {
+        "tens_digit_accuracy": {"geometry_only": tens_accuracy, "resnet_hungarian": tens_accuracy_hungarian},
         "metrics": {"resnet_only": resnet_metrics, "resnet_hungarian": hungarian_metrics},
         "method_comparison": method_comparison,
         "metrics_by_number": number_metrics_by_number,

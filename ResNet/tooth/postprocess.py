@@ -69,6 +69,47 @@ def correct_mirrors_by_digit_occurrence(raw_pred, mirrors):
     return [False] * split_idx + [True] * (n - split_idx)
 
 
+def resolve_arch_duplicates(probs):
+    """Whole-arch last-digit resolution that needs NO quadrant/tens information at all - unlike
+    resolve_quadrant_duplicates, which requires a (`group_keys`) quadrant grouping as input and
+    can silently inherit whatever error is in that grouping (see project notes: a wrong PCA
+    quadrant guess merging the wrong teeth into one group let Hungarian "resolve" a conflict by
+    reassigning an already-correct neighboring tooth to a wrong digit - a cascade failure this
+    function can't have, because it never groups by quadrant in the first place).
+
+    A full arch has at most two teeth of any given last digit (one per quadrant), never more -
+    that's true regardless of quadrant detection, missing teeth, or anything else. So instead of
+    grouping first and enforcing "at most one per group", this solves a single Hungarian
+    assignment over the WHOLE arch (<=12 teeth) with each of the 6 digits given capacity 2,
+    maximizing total log-probability. Implemented by duplicating each digit into two
+    identical-cost virtual columns (n x 12 cost matrix) and running ordinary one-to-one
+    assignment on that - each real digit is just two adjacent columns mapped back with `// 2`.
+
+    Meant to run BEFORE tens-digit determination (see correct_mirrors_by_digit_occurrence, which
+    should be called on THIS function's output rather than raw argmax) rather than after it -
+    resolving digits first and reading off the quadrant boundary from where a digit repeats is
+    what makes this immune to bad quadrant groupings, instead of the other way around.
+
+    probs: (n, 6) softmax probabilities, one row per tooth, in left-to-right arch order.
+    Returns an (n,) array of 0-indexed digit predictions.
+    """
+    n = probs.shape[0]
+    if n == 0:
+        return np.array([], dtype=int)
+    if n > 12:
+        # More teeth than a full arch has slots for - over-detection is already a rare edge
+        # case elsewhere in this pipeline; leave it as independent argmax rather than forcing a
+        # capacity-2 assignment that can't possibly be anatomically meaningful past 12 teeth.
+        return probs.argmax(axis=1)
+
+    cost = -np.log(np.clip(probs, 1e-8, 1.0))
+    expanded_cost = np.repeat(cost, 2, axis=1)  # (n, 12): columns [d0,d0,d1,d1,...,d5,d5]
+    row_ind, col_ind = linear_sum_assignment(expanded_cost)
+    result = np.zeros(n, dtype=int)
+    result[row_ind] = col_ind // 2
+    return result
+
+
 def _group_ranges(group_keys, n):
     """Contiguous runs of equal keys -> [(start, end), ...] half-open ranges. Shared by all three
     resolvers below; the only thing they disagree on is what to do inside each range."""

@@ -129,7 +129,7 @@ _postprocess_spec = importlib.util.spec_from_file_location(
 )
 _postprocess_module = importlib.util.module_from_spec(_postprocess_spec)
 _postprocess_spec.loader.exec_module(_postprocess_module)
-resolve_quadrant_duplicates = _postprocess_module.resolve_quadrant_duplicates
+resolve_arch_duplicates = _postprocess_module.resolve_arch_duplicates
 correct_mirrors_by_digit_occurrence = _postprocess_module.correct_mirrors_by_digit_occurrence
 
 
@@ -240,14 +240,18 @@ def tooth_predict():
 
         probs = outputs.cpu().numpy()
         # Teeth arrive already ordered left-to-right along the arch (js/api.js
-        # runToothAnalysis), so each quadrant is one contiguous run of matching `mirror` values.
-        # Refine the initial geometric `mirror` flags using raw digit occurrence order (see
-        # correct_mirrors_by_digit_occurrence), then resolve duplicate-digit predictions within
-        # each quadrant (see resolve_quadrant_duplicates).
-        mirrors = [bool(tooth.get('mirror', False)) for tooth in teeth]
-        raw_preds = probs.argmax(axis=1)
-        corrected_mirrors = correct_mirrors_by_digit_occurrence(raw_preds, mirrors)
-        preds = resolve_quadrant_duplicates(probs, corrected_mirrors)
+        # runToothAnalysis). Digits first, tens second - resolve the last digit arch-wide with NO
+        # quadrant/tens information at all (resolve_arch_duplicates: capacity-2 Hungarian over
+        # the whole arch, since a real arch has at most two teeth of any given digit regardless
+        # of quadrant detection), then read the tens boundary off wherever a digit repeats
+        # (correct_mirrors_by_digit_occurrence), falling back to the client's geometry-only
+        # `mirror` guess only for a digit that appears just once. Doing it the other way -
+        # grouping by the (occasionally wrong) geometric guess before resolving digits, like this
+        # endpoint used to - let a bad quadrant call corrupt an already-correct neighboring
+        # tooth's digit too; see ResNet/tooth/postprocess.py's docstrings for the full story.
+        initial_mirrors = [bool(tooth.get('mirror', False)) for tooth in teeth]
+        preds = resolve_arch_duplicates(probs)
+        corrected_mirrors = correct_mirrors_by_digit_occurrence(preds.tolist(), initial_mirrors)
         confidences = probs[np.arange(len(preds)), preds]
 
         predictions = []
