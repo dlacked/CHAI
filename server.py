@@ -2,6 +2,7 @@ import io
 import base64
 import importlib.util
 from pathlib import Path
+import numpy as np
 import torch
 from torchvision import transforms
 from PIL import Image
@@ -64,35 +65,6 @@ for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
     else:
         print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
-# Load the arch-level Transformer that refines each tooth's ResNet prediction using self-attention
-# over the whole dental arch (see ViT/arch/model.py). Loaded by file path rather than sys.path +
-# import, so this doesn't depend on ViT/arch being an importable package or collide with any
-# other "model" module name.
-ARCH_MODEL_PATH = ROOT / "ViT" / "arch" / "model.py"
-ARCH_MODEL_DIR = ROOT / "ViT" / "arch" / "model"
-ARCH_MAX_TEETH = 12  # matches ViT/arch/build_dataset.py's MAX_TEETH_PER_ARCH / the model's pos_embed length
-
-arch_models = {}
-if ARCH_MODEL_PATH.exists():
-    spec = importlib.util.spec_from_file_location("vit_arch_model", str(ARCH_MODEL_PATH))
-    _vit_arch_model_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(_vit_arch_model_module)
-    ArchToothTransformer = _vit_arch_model_module.ArchToothTransformer
-
-    for jaw_name in ("lower", "upper"):
-        weights_path = ARCH_MODEL_DIR / f"{jaw_name}_best.pth"
-        if weights_path.exists():
-            print(f"Loading arch transformer for {jaw_name} from {weights_path}...")
-            arch_model = ArchToothTransformer(num_classes=6)
-            arch_model.load_state_dict(torch.load(weights_path, map_location=device))
-            arch_model.to(device)
-            arch_model.eval()
-            arch_models[jaw_name] = arch_model
-        else:
-            print(f"Arch transformer weights not found for {jaw_name}: {weights_path} (falling back to ResNet-only for this jaw)")
-else:
-    print(f"ViT/arch/model.py not found at {ARCH_MODEL_PATH}; arch-level refinement disabled.")
-
 # Load the arch-level Transformer that predicts an arch's overall complexity class (I/II/III)
 # from per-tooth geometry alone - no image or ResNet features involved (see
 # ViT/complexity/model.py). Same dynamic-import approach as the ArchToothTransformer above.
@@ -147,6 +119,18 @@ val_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
+
+
+# Shared with functions/graph/tooth.py's held-out evaluation (see that module's use of the same
+# function, and ResNet/tooth/postprocess.py's docstring for why this replaced the ViT arch
+# transformer).
+_postprocess_spec = importlib.util.spec_from_file_location(
+    "resnet_tooth_postprocess", str(ROOT / "ResNet" / "tooth" / "postprocess.py")
+)
+_postprocess_module = importlib.util.module_from_spec(_postprocess_spec)
+_postprocess_spec.loader.exec_module(_postprocess_module)
+resolve_quadrant_duplicates = _postprocess_module.resolve_quadrant_duplicates
+
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -250,51 +234,27 @@ def tooth_predict():
         input_meta = torch.stack(input_meta).to(device)
 
         model = tooth_models[jaw]
-        arch_model = arch_models.get(jaw)
-        refined = False
         with torch.no_grad():
-            # Run the ResNet backbone in stages (instead of model(img, meta), which only
-            # returns the final softmax) so the image embedding is available to feed the arch
-            # transformer - mirrors ViT/arch/build_dataset.py's cache-building forward pass.
-            img_features = model.resnet(input_images)
-            meta_features = model.meta_fc(input_meta)
-            logits = model.classifier(torch.cat((img_features, meta_features), dim=1))
-            outputs = torch.softmax(logits, dim=1)
+            outputs = model(input_images, input_meta)
 
-            if arch_model is not None:
-                # Teeth arrive already ordered left-to-right along the arch (js/api.js
-                # runToothAnalysis), matching the order the arch transformer was trained on.
-                # Only the first ARCH_MAX_TEETH get refined - the model's positional embedding
-                # doesn't support longer sequences (over-detection past 12 teeth is already a
-                # rare edge case in this pipeline).
-                seq_len = min(img_features.size(0), ARCH_MAX_TEETH)
-                geom = input_meta[:seq_len].unsqueeze(0)
-                img_vec = img_features[:seq_len].unsqueeze(0)
-                prob_vec = outputs[:seq_len].unsqueeze(0)
-                key_padding_mask = torch.zeros(1, seq_len, dtype=torch.bool, device=device)
-
-                refined_logits = arch_model(geom, img_vec, prob_vec, key_padding_mask)
-                refined_probs = torch.softmax(refined_logits, dim=-1)[0]
-
-                if seq_len < outputs.size(0):
-                    outputs = outputs.clone()
-                    outputs[:seq_len] = refined_probs
-                else:
-                    outputs = refined_probs
-                refined = True
-
-            confidences, preds = torch.max(outputs, dim=1)
+        probs = outputs.cpu().numpy()
+        # Teeth arrive already ordered left-to-right along the arch (js/api.js
+        # runToothAnalysis), so each quadrant is one contiguous run of matching `mirror` values -
+        # resolve any duplicate-digit predictions within a quadrant (see resolve_quadrant_duplicates).
+        mirrors = [bool(tooth.get('mirror', False)) for tooth in teeth]
+        preds = resolve_quadrant_duplicates(probs, mirrors)
+        confidences = probs[np.arange(len(preds)), preds]
 
         predictions = []
         for i in range(len(teeth)):
             predictions.append({
-                'probs': [float(p) for p in outputs[i].cpu().tolist()],
-                'class_idx': int(preds[i].item()),
-                'predicted_last_digit': int(preds[i].item()) + 1,
-                'confidence': float(confidences[i].item())
+                'probs': [float(p) for p in probs[i].tolist()],
+                'class_idx': int(preds[i]),
+                'predicted_last_digit': int(preds[i]) + 1,
+                'confidence': float(confidences[i])
             })
 
-        return jsonify({'success': True, 'predictions': predictions, 'refined': refined})
+        return jsonify({'success': True, 'predictions': predictions})
     except Exception as e:
         print(f"Error during tooth prediction: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500

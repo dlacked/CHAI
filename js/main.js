@@ -109,3 +109,12 @@ pipelineOffRadio.addEventListener('change', () => {
     if (!pipelineOffRadio.checked) return;
     redrawCanvas();
 });
+
+// Debug overlay radios don't fetch anything new - everything they draw comes from data
+// already cached by the pipeline - so a redraw is all that's needed.
+[vizOffRadio, vizSegmentationRadio, vizHeldKarpRadio, vizMirroringRadio].forEach(radio => {
+    radio.addEventListener('change', () => {
+        if (!radio.checked) return;
+        redrawCanvas();
+    });
+});

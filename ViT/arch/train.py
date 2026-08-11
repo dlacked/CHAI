@@ -211,7 +211,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train (default: 1000)")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size in arches (default: 32)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
-    parser.add_argument("--patience", type=int, default=10, help="Early stopping patience in epochs (default: 10)")
+    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience in epochs (default: 20)")
 
     args = parser.parse_args()
 

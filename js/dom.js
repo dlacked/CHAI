@@ -9,6 +9,19 @@ const pipelineOnRadio = document.getElementById('pipeline-on-radio');
 const pipelineOffRadio = document.getElementById('pipeline-off-radio');
 const isPipelineOn = () => pipelineOnRadio.checked;
 
+// Debug overlay radios: mutually exclusive with each other, and with the normal FDI-badge
+// view - see drawFdiNumbers/redrawCanvas in render.js.
+const vizOffRadio = document.getElementById('viz-off-radio');
+const vizSegmentationRadio = document.getElementById('viz-segmentation-radio');
+const vizHeldKarpRadio = document.getElementById('viz-heldkarp-radio');
+const vizMirroringRadio = document.getElementById('viz-mirroring-radio');
+const getVizMode = () => {
+    if (vizSegmentationRadio.checked) return 'segmentation';
+    if (vizHeldKarpRadio.checked) return 'heldkarp';
+    if (vizMirroringRadio.checked) return 'mirroring';
+    return 'off';
+};
+
 let imageFiles = [];
 let currentImageIndex = 0;
 let currentObjectURL = null;

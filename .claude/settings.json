@@ -54,7 +54,22 @@
       "Bash(nvidia-smi)",
       "Bash(python -c \"import os; print\\('cpu_count', os.cpu_count\\(\\)\\)\")",
       "Bash(wmic ComputerSystem get TotalPhysicalMemory)",
-      "Bash(wmic OS get FreePhysicalMemory)"
+      "Bash(wmic OS get FreePhysicalMemory)",
+      "Bash(git -C \"c:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\" log --oneline -20)",
+      "Bash(git -C \"c:\\\\Users\\\\chnyon\\\\Desktop\\\\lab\\\\WORK\\\\2026-1\\\\CHAI\\\\CHAI\" status)",
+      "Bash(./.venv/Scripts/python.exe -)",
+      "Bash(python functions/features/main.py --no_mirror --splits train,val,test --force)",
+      "Bash(python ViT/complexity/train.py --jaw lower --patience 20 --cache_dir ViT/complexity/cache --model_dir ViT/complexity/model_ablation/mirror --runs_dir ViT/complexity/runs_ablation/mirror)",
+      "Bash(python ViT/complexity/train.py --jaw upper --patience 20 --cache_dir ViT/complexity/cache --model_dir ViT/complexity/model_ablation/mirror --runs_dir ViT/complexity/runs_ablation/mirror)",
+      "Bash(python ViT/complexity/train.py --jaw lower --patience 20 --cache_dir ViT/complexity/cache_nomirror --model_dir ViT/complexity/model_ablation/nomirror --runs_dir ViT/complexity/runs_ablation/nomirror)",
+      "Bash(python ViT/complexity/train.py --jaw upper --patience 20 --cache_dir ViT/complexity/cache_nomirror --model_dir ViT/complexity/model_ablation/nomirror --runs_dir ViT/complexity/runs_ablation/nomirror)",
+      "Bash(git checkout *)",
+      "Bash(rm -f ResNet/tooth/csv/*_nomirror.csv)",
+      "Bash(rm -rf ViT/complexity/cache_nomirror ViT/complexity/model_ablation ViT/complexity/runs_ablation)",
+      "Bash(timeout 90 bash -c 'until curl -sf http://localhost:5001/health >/dev/null 2>&1; do sleep 2; done')",
+      "Bash(curl -s http://localhost:5001/health)",
+      "Bash(python server.py)",
+      "Bash(echo \"started $!\")"
     ]
   }
 }

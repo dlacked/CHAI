@@ -181,7 +181,11 @@ const computeToothMeta = (pred, pca) => {
         y1: y1_c / canvas.height,
         x2: x2_c / canvas.width,
         y2: y2_c / canvas.height,
-        theta
+        theta,
+        // Which quadrant side this tooth is on (same test as computeQuadrantTens) - sent to
+        // server.py /tooth_predict so it can group teeth by quadrant for the duplicate-digit
+        // post-processing, without needing to know the (yet-to-be-predicted) FDI number itself.
+        mirror
     };
 };
 

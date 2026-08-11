@@ -52,7 +52,7 @@ const cropToothImage = (image, box, padding = 10) => {
 
 const COMPLEXITY_LABELS = ['I', 'II', 'III'];
 
-// Renders the Angle's Classification line into its own dedicated element
+// Renders the Arch Complexity line into its own dedicated element
 // (#complexity-result), deliberately separate from #analysis-result-list - that list gets
 // wiped by clearAnalysisResult() whenever FDI reconstruction succeeds cleanly (see
 // drawFdiNumbers/render.js), but this is independent of whether that reconstruction
@@ -68,34 +68,34 @@ const renderComplexityStatus = (file) => {
     }
 
     if (complexity.status === 'loading') {
-        el.innerHTML = "Angle's Classification: <span class=\"analysis-complexity-loading\">Predicting...</span>";
+        el.innerHTML = "Arch Complexity: <span class=\"analysis-complexity-loading\">Predicting...</span>";
         return;
     }
     if (complexity.status === 'error') {
-        el.innerHTML = "Angle's Classification: <span class=\"analysis-complexity-error\">Error</span>";
+        el.innerHTML = "Arch Complexity: <span class=\"analysis-complexity-error\">Error</span>";
         return;
     }
     const label = COMPLEXITY_LABELS[complexity.classIdx] ?? '?';
-    el.innerHTML = `Angle's Classification: <span class="analysis-complexity-value">Class ${label}</span>`;
+    el.innerHTML = `Arch Complexity: <span class="analysis-complexity-value">Class ${label}</span>`;
 };
 
-// Clears the Angle's Classification line - called whenever there are no teeth/jaw to classify
+// Clears the Arch Complexity line - called whenever there are no teeth/jaw to classify
 // at all (FDI unchecked, no predictions/PCA, or jaw classification missing).
 const clearComplexityStatus = () => {
     const el = document.getElementById('complexity-result');
     if (el) el.innerHTML = '';
 };
 
-// Renders the LOSS: line into its own dedicated element (#loss-result), listing the missing
-// teeth's raw FDI numbers with the same '#' prefix convention as drawFdiNumberBadge.
-const renderLossStatus = (missingNumbers) => {
-    const el = document.getElementById('loss-result');
+// Renders the MISSING: line into its own dedicated element (#missing-result), listing the
+// missing teeth's raw FDI numbers with the same '#' prefix convention as drawFdiNumberBadge.
+const renderMissingStatus = (missingNumbers) => {
+    const el = document.getElementById('missing-result');
     if (!el) return;
     if (!missingNumbers || missingNumbers.length === 0) {
         el.textContent = '';
         return;
     }
-    el.textContent = `LOSS: ${missingNumbers.map(n => `#${n}`).join(', ')}`;
+    el.textContent = `MISSING: ${missingNumbers.map(n => `#${n}`).join(', ')}`;
 };
 
 // Renders the cached per-tooth probability vectors (left-to-right arch order) into the
@@ -207,7 +207,8 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
         y1: metas[idx].y1,
         x2: metas[idx].x2,
         y2: metas[idx].y2,
-        theta: metas[idx].theta
+        theta: metas[idx].theta,
+        mirror: metas[idx].mirror
     }));
 
     fetch('/tooth_predict', {
@@ -219,12 +220,9 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
         .then(data => {
             if (data.success) {
                 // rows[i] corresponds to teeth[i], which was built from order[i] - so
-                // order[i] maps rows[i] back to its original prediction index. `refined`
-                // reflects whether the arch transformer actually ran (see server.py
-                // /tooth_predict) - false when that jaw's ViT/arch model isn't trained yet,
-                // in which case rows are plain ResNet-only probabilities.
+                // order[i] maps rows[i] back to its original prediction index.
                 const rows = data.predictions.map(p => ({ probs: p.probs, classIdx: p.class_idx }));
-                toothAnalysisCache[file.name] = { status: 'done', rows, order, refined: !!data.refined };
+                toothAnalysisCache[file.name] = { status: 'done', rows, order };
                 if (statusEl) {
                     statusEl.textContent = ` Done (${rows.length})`;
                     statusEl.style.color = '#4caf50';

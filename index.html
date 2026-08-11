@@ -55,12 +55,33 @@
                 </div>
             </div>
             <div class="sidebar-section">
+                <div class="sidebar-label">VISUALIZATION</div>
+                <div class="sidebar-item">
+                    <section>
+                        <input type="radio" id="viz-off-radio" name="viz-mode" checked>
+                        <label for="viz-off-radio">Off</label>
+                    </section>
+                    <section>
+                        <input type="radio" id="viz-segmentation-radio" name="viz-mode">
+                        <label for="viz-segmentation-radio">Segmentation</label>
+                    </section>
+                    <section>
+                        <input type="radio" id="viz-heldkarp-radio" name="viz-mode">
+                        <label for="viz-heldkarp-radio">Held-Karp Order</label>
+                    </section>
+                    <section>
+                        <input type="radio" id="viz-mirroring-radio" name="viz-mode">
+                        <label for="viz-mirroring-radio">Coords Mirroring</label>
+                    </section>
+                </div>
+            </div>
+            <div class="sidebar-section">
                 <div class="sidebar-label-row">
                     <div class="sidebar-label">ANALYSIS RESULT</div>
                     <span id="analysis-status" class="sidebar-status-inline"></span>
                 </div>
                 <div id="complexity-result" class="analysis-complexity"></div>
-                <div id="loss-result" class="analysis-loss"></div>
+                <div id="missing-result" class="analysis-missing"></div>
                 <div id="analysis-result-list" class="analysis-result-list"></div>
             </div>
             <div class="sidebar-section sidebar-darkmode">
