@@ -189,21 +189,25 @@ const drawMirroringOverlay = (predictions, pca) => {
     ctx.setLineDash([]);
 };
 
-// Determines each detected tooth's FDI tens digit (quadrant) in the Holding state, purely from
-// which side of the PCA midline (x_rot sign) the tooth's centroid falls on - see
-// computeQuadrantTens. Independent of the predicted last digits, so a wrong/duplicated last
-// digit from the ResNet classifier can never also throw off the quadrant assignment.
+// Determines each detected tooth's FDI tens digit (quadrant) in the Holding state: uses the
+// server-refined `mirror` flag (derived from raw digit occurrence sequence before Hungarian
+// assignment) when available, falling back to PCA coordinate side (x_rot sign) if missing.
 const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
     const tensByVertexIdx = new Array(predictions.length).fill(null);
     order.forEach((vertexIdx, i) => {
         // cached.rows is already in arch order (js/api.js runToothAnalysis: "rows[i]
         // corresponds to teeth[i], which was built from order[i]"), so a missing row here just
         // means this arch position has no prediction yet.
-        if (!cached.rows[i]) return;
+        const row = cached.rows[i];
+        if (!row) return;
 
-        const centroid = computeCentroid(predictions[vertexIdx].polygon);
-        const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
-        tensByVertexIdx[vertexIdx] = computeQuadrantTens(tx, isUpper);
+        if (typeof row.mirror === 'boolean') {
+            tensByVertexIdx[vertexIdx] = isUpper ? (row.mirror ? 2 : 1) : (row.mirror ? 3 : 4);
+        } else {
+            const centroid = computeCentroid(predictions[vertexIdx].polygon);
+            const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
+            tensByVertexIdx[vertexIdx] = computeQuadrantTens(tx, isUpper);
+        }
     });
 
     return tensByVertexIdx;

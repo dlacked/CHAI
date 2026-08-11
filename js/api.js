@@ -221,7 +221,11 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
             if (data.success) {
                 // rows[i] corresponds to teeth[i], which was built from order[i] - so
                 // order[i] maps rows[i] back to its original prediction index.
-                const rows = data.predictions.map(p => ({ probs: p.probs, classIdx: p.class_idx }));
+                const rows = data.predictions.map(p => ({
+                    probs: p.probs,
+                    classIdx: p.class_idx,
+                    mirror: p.mirror
+                }));
                 toothAnalysisCache[file.name] = { status: 'done', rows, order };
                 if (statusEl) {
                     statusEl.textContent = ` Done (${rows.length})`;

@@ -130,6 +130,7 @@ _postprocess_spec = importlib.util.spec_from_file_location(
 _postprocess_module = importlib.util.module_from_spec(_postprocess_spec)
 _postprocess_spec.loader.exec_module(_postprocess_module)
 resolve_quadrant_duplicates = _postprocess_module.resolve_quadrant_duplicates
+correct_mirrors_by_digit_occurrence = _postprocess_module.correct_mirrors_by_digit_occurrence
 
 
 @app.route('/health', methods=['GET'])
@@ -239,10 +240,14 @@ def tooth_predict():
 
         probs = outputs.cpu().numpy()
         # Teeth arrive already ordered left-to-right along the arch (js/api.js
-        # runToothAnalysis), so each quadrant is one contiguous run of matching `mirror` values -
-        # resolve any duplicate-digit predictions within a quadrant (see resolve_quadrant_duplicates).
+        # runToothAnalysis), so each quadrant is one contiguous run of matching `mirror` values.
+        # Refine the initial geometric `mirror` flags using raw digit occurrence order (see
+        # correct_mirrors_by_digit_occurrence), then resolve duplicate-digit predictions within
+        # each quadrant (see resolve_quadrant_duplicates).
         mirrors = [bool(tooth.get('mirror', False)) for tooth in teeth]
-        preds = resolve_quadrant_duplicates(probs, mirrors)
+        raw_preds = probs.argmax(axis=1)
+        corrected_mirrors = correct_mirrors_by_digit_occurrence(raw_preds, mirrors)
+        preds = resolve_quadrant_duplicates(probs, corrected_mirrors)
         confidences = probs[np.arange(len(preds)), preds]
 
         predictions = []
@@ -251,7 +256,8 @@ def tooth_predict():
                 'probs': [float(p) for p in probs[i].tolist()],
                 'class_idx': int(preds[i]),
                 'predicted_last_digit': int(preds[i]) + 1,
-                'confidence': float(confidences[i])
+                'confidence': float(confidences[i]),
+                'mirror': bool(corrected_mirrors[i])
             })
 
         return jsonify({'success': True, 'predictions': predictions})

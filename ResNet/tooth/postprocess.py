@@ -16,36 +16,57 @@ def correct_mirrors_by_digit_occurrence(raw_pred, mirrors):
 
     A full arch's last digit runs 1..6 with each digit appearing at most once per quadrant (so
     at most twice total, once per side). Whichever arch-order position hits a given digit FIRST
-    is unambiguously the non-mirrored side and the SECOND occurrence is the mirrored side - no
-    geometry needed at all for that tooth, and completely unaffected by a missing tooth
-    elsewhere in the arch. This is the fix for a failure mode the PCA-only geometric guess can't
-    avoid: a missing tooth skews the PCA-estimated midline, and the tooth most exposed to that
-    skew is exactly the one closest to the true midline (a digit-"1" tooth) - which is precisely
-    the tooth this occurrence check disambiguates for free whenever its pair is still present.
+    is unambiguously the non-mirrored side and the SECOND occurrence is the mirrored side.
 
-    Only a digit that appears exactly ONCE (its own partner tooth is genuinely missing, so there
-    is no second occurrence to disambiguate against) falls back to the geometric guess - that
-    case genuinely has no digit-based signal to use instead. Three or more occurrences of the
-    same digit in one arch shouldn't happen (a real quadrant has at most one of each) and is
-    left on the geometric guess too, rather than picking which two of three "count" as the pair.
+    Derives a single contiguous quadrant split boundary `split_idx` (teeth 0..split_idx-1 are
+    `False` / Q1 or Q4, and teeth split_idx..n-1 are `True` / Q2 or Q3). This ensures
+    resolve_quadrant_duplicates receives clean contiguous quadrant runs rather than isolated,
+    fragmented boolean values.
 
     raw_pred: (n,) array/list of 0-indexed digit predictions (ResNet's own argmax, before any
     post-process), one per tooth, in left-to-right arch order. mirrors: length-n list of bools,
     the client's geometry-only guess. Returns a corrected length-n list of bools.
     """
     n = len(raw_pred)
-    corrected = list(mirrors)
+    if n == 0:
+        return []
+
+    # Initial geometric split index from PCA (first True index in mirrors)
+    initial_split_idx = n
+    for i in range(n):
+        if mirrors[i]:
+            initial_split_idx = i
+            break
+
     positions_by_digit = {}
     for i in range(n):
         positions_by_digit.setdefault(int(raw_pred[i]), []).append(i)
 
-    for positions in positions_by_digit.values():
+    min_split = 0
+    max_split = n
+
+    # Digit 0 ("1") is closest to midline and provides the strongest boundary constraint,
+    # followed by 1 ("2"), 2 ("3"), etc.
+    for digit in sorted(positions_by_digit.keys()):
+        positions = positions_by_digit[digit]
         if len(positions) == 2:
             first, second = positions
-            corrected[first] = False
-            corrected[second] = True
+            if first < second:
+                # The split point MUST be strictly after `first` and at/before `second`
+                min_split = max(min_split, first + 1)
+                max_split = min(max_split, second)
 
-    return corrected
+    if min_split <= max_split:
+        if min_split <= initial_split_idx <= max_split:
+            split_idx = initial_split_idx
+        elif initial_split_idx < min_split:
+            split_idx = min_split
+        else:
+            split_idx = max_split
+    else:
+        split_idx = initial_split_idx
+
+    return [False] * split_idx + [True] * (n - split_idx)
 
 
 def _group_ranges(group_keys, n):
