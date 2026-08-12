@@ -31,30 +31,40 @@
         "resnet_only": {
           "label": "ResNet-only",
           "accuracy": 0.9979667700396377,
+          "precision": 0.9999366988918728,
+          "recall": 0.9979772406558612,
           "f1": 0.9989518485013494,
           "auc": 0.9999999862483856
         },
         "resnet_vit": {
           "label": "ResNet+ViT",
           "accuracy": 0.997987307716005,
+          "precision": 0.999957379704215,
+          "recall": 0.9979976579860911,
           "f1": 0.9989725020931332,
           "auc": 0.9999999811574444
         },
         "resnet_hungarian": {
           "label": "ResNet+Hungarian",
           "accuracy": 0.9996097841490214,
+          "precision": 0.999957379704215,
+          "recall": 0.9996106270742531,
           "f1": 0.9997839042274567,
           "auc": 0.9999999862483856
         },
         "resnet_monodp": {
           "label": "ResNet+Monotonic-DP",
           "accuracy": 0.994516440409932,
+          "precision": 0.9964727843947881,
+          "recall": 0.9945452043882065,
           "f1": 0.9954953465090539,
           "auc": 0.9999999862483856
         },
         "resnet_greedy": {
           "label": "ResNet+Greedy",
           "accuracy": 0.9968371978394365,
+          "precision": 0.9987876006878289,
+          "recall": 0.9968518963834815,
           "f1": 0.9978087024964114,
           "auc": 0.9999999862483856
         }
@@ -63,30 +73,40 @@
         "resnet_only": {
           "label": "ResNet-only",
           "accuracy": 0.9982513537906137,
+          "precision": 0.998904223679673,
+          "recall": 0.9982385460172853,
           "f1": 0.9985705466937379,
           "auc": 0.9999779304860746
         },
         "resnet_vit": {
           "label": "ResNet+ViT",
           "accuracy": 0.9976308664259927,
+          "precision": 0.9982469063211635,
+          "recall": 0.9976407831334191,
           "f1": 0.9979421932989131,
           "auc": 0.9999831935437548
         },
         "resnet_hungarian": {
           "label": "ResNet+Hungarian",
           "accuracy": 0.9997461642599278,
+          "precision": 0.9997325150346293,
+          "recall": 0.9997477562943212,
           "f1": 0.999740085319056,
           "auc": 0.9999779304860746
         },
         "resnet_monodp": {
           "label": "ResNet+Monotonic-DP",
           "accuracy": 0.9951489169675091,
+          "precision": 0.9957737331576196,
+          "recall": 0.995231103801351,
           "f1": 0.9954989031551001,
           "auc": 0.9999779304860746
         },
         "resnet_greedy": {
           "label": "ResNet+Greedy",
           "accuracy": 0.9984487815884476,
+          "precision": 0.9990293518239324,
+          "recall": 0.9984796690577107,
           "f1": 0.9987520248974627,
           "auc": 0.9999779304860746
         }
@@ -95,33 +115,213 @@
         "resnet_only": {
           "label": "ResNet-only",
           "accuracy": 0.9980866816404625,
+          "precision": 0.9995005580285176,
+          "recall": 0.9980983079041582,
           "f1": 0.9987970022251691,
           "auc": 0.9999907520922499
         },
         "resnet_vit": {
           "label": "ResNet+ViT",
           "accuracy": 0.9978371183761751,
+          "precision": 0.9992394050502161,
+          "recall": 0.9978551514912976,
           "f1": 0.9985450141871052,
           "auc": 0.9999967284144029
         },
         "resnet_hungarian": {
           "label": "ResNet+Hungarian",
           "accuracy": 0.99966724898095,
+          "precision": 0.999864211053135,
+          "recall": 0.9996695123447293,
           "f1": 0.9997668130115929,
           "auc": 0.9999907520922499
         },
         "resnet_monodp": {
           "label": "ResNet+Monotonic-DP",
           "accuracy": 0.9947829393798947,
+          "precision": 0.996176252292733,
+          "recall": 0.9948405895877598,
           "f1": 0.9955000833443552,
           "auc": 0.9999907520922499
         },
         "resnet_greedy": {
           "label": "ResNet+Greedy",
           "accuracy": 0.9975162513220911,
+          "precision": 0.9988925763481703,
+          "recall": 0.9975477490342987,
           "f1": 0.9982144792513168,
           "auc": 0.9999907520922499
         }
+      }
+    },
+    "arch_level_method_comparison": {
+      "lower": {
+        "resnet_only": {
+          "label": "ResNet-only",
+          "accuracy": 0.9761789013125911,
+          "precision": 0.9995602598665314,
+          "recall": 0.9978642771909675,
+          "f1": 0.9986730203138638,
+          "auc": 0.9025378079518661
+        },
+        "resnet_vit": {
+          "label": "ResNet+ViT",
+          "accuracy": 0.9761789013125911,
+          "precision": 0.9995602598665314,
+          "recall": 0.9978642771909675,
+          "f1": 0.9986730203138638,
+          "auc": 0.7263026973737703
+        },
+        "resnet_hungarian": {
+          "label": "ResNet+Hungarian",
+          "accuracy": 0.9953816237238697,
+          "precision": 0.9995602598665314,
+          "recall": 0.9995602598665314,
+          "f1": 0.9995602598665314,
+          "auc": 0.9647516226463595
+        },
+        "resnet_monodp": {
+          "label": "ResNet+Monotonic-DP",
+          "accuracy": 0.9759358288770054,
+          "precision": 0.9984111901710355,
+          "recall": 0.9978642771909675,
+          "f1": 0.9981258442683918,
+          "auc": 0.9450193089047385
+        },
+        "resnet_greedy": {
+          "label": "ResNet+Greedy",
+          "accuracy": 0.9761789013125911,
+          "precision": 0.9984111901710355,
+          "recall": 0.9978642771909675,
+          "f1": 0.9981258442683918,
+          "auc": 0.9443679364175949
+        }
+      },
+      "upper": {
+        "resnet_only": {
+          "label": "ResNet-only",
+          "accuracy": 0.9809084924292297,
+          "precision": 0.9997905320485966,
+          "recall": 0.9982195224130715,
+          "f1": 0.9989648280944035,
+          "auc": 0.9411189539458459
+        },
+        "resnet_vit": {
+          "label": "ResNet+ViT",
+          "accuracy": 0.9743252139565504,
+          "precision": 0.999308755760369,
+          "recall": 0.9975482275021458,
+          "f1": 0.9983804180858876,
+          "auc": 0.9455799549549548
+        },
+        "resnet_hungarian": {
+          "label": "ResNet+Hungarian",
+          "accuracy": 0.9976958525345622,
+          "precision": 0.9997905320485966,
+          "recall": 0.9997905320485966,
+          "f1": 0.9997905320485966,
+          "auc": 0.9601263138049678
+        },
+        "resnet_monodp": {
+          "label": "ResNet+Monotonic-DP",
+          "accuracy": 0.9822251481237656,
+          "precision": 0.9991022802082714,
+          "recall": 0.9991022802082714,
+          "f1": 0.9991022802082714,
+          "auc": 0.995078691291828
+        },
+        "resnet_greedy": {
+          "label": "ResNet+Greedy",
+          "accuracy": 0.990125082290981,
+          "precision": 0.9991022802082714,
+          "recall": 0.9991022802082714,
+          "f1": 0.9991022802082714,
+          "auc": 0.990625
+        }
+      },
+      "pooled": {
+        "resnet_only": {
+          "label": "ResNet-only",
+          "accuracy": 0.9781879194630873,
+          "precision": 0.9996580740288796,
+          "recall": 0.9980151769371582,
+          "f1": 0.9987969733392091,
+          "auc": 0.8875639559601823
+        },
+        "resnet_vit": {
+          "label": "ResNet+ViT",
+          "accuracy": 0.9753914988814317,
+          "precision": 0.9994534268863131,
+          "recall": 0.9977300267778471,
+          "f1": 0.9985487298260839,
+          "auc": 0.7414890826991243
+        },
+        "resnet_hungarian": {
+          "label": "ResNet+Hungarian",
+          "accuracy": 0.9963646532438478,
+          "precision": 0.9996580740288796,
+          "recall": 0.9996580740288796,
+          "f1": 0.9996580740288796,
+          "auc": 0.931998747814072
+        },
+        "resnet_monodp": {
+          "label": "ResNet+Monotonic-DP",
+          "accuracy": 0.9786073825503355,
+          "precision": 0.9987047488305886,
+          "recall": 0.9983901515151524,
+          "f1": 0.9985406111007961,
+          "auc": 0.9448576687425935
+        },
+        "resnet_greedy": {
+          "label": "ResNet+Greedy",
+          "accuracy": 0.9821029082774049,
+          "precision": 0.9987047488305886,
+          "recall": 0.9983901515151524,
+          "f1": 0.9985406111007961,
+          "auc": 0.9332400519646925
+        }
+      }
+    },
+    "missing_teeth_metrics": {
+      "0": {
+        "n_arches": 6079,
+        "accuracy": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "auc": NaN
+      },
+      "1": {
+        "n_arches": 497,
+        "accuracy": 0.96579476861167,
+        "precision": 0.9968904335101519,
+        "recall": 0.9968904335101519,
+        "f1": 0.9968904335101519,
+        "auc": 0.6482843137254901
+      },
+      "2": {
+        "n_arches": 551,
+        "accuracy": 0.9836660617059891,
+        "precision": 0.9983666061705989,
+        "recall": 0.9983666061705989,
+        "f1": 0.9983666061705989,
+        "auc": 0.930709307093071
+      },
+      "3": {
+        "n_arches": 22,
+        "accuracy": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "auc": NaN
+      },
+      "4": {
+        "n_arches": 3,
+        "accuracy": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "auc": NaN
       }
     },
     "metrics_by_number": {

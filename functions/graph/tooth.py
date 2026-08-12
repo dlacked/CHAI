@@ -520,10 +520,186 @@ def compute_method_comparison(per_jaw):
             series_result[key] = {
                 "label": label,
                 "accuracy": accuracy_score(y_true, y_pred_gated),
+                "precision": precision_score(y_true, y_pred_gated, labels=list(range(6)), average="macro", zero_division=0),
+                "recall": recall_score(y_true, y_pred_gated, labels=list(range(6)), average="macro", zero_division=0),
                 "f1": f1_score(y_true, y_pred_gated, labels=list(range(6)), average="macro", zero_division=0),
                 "auc": auc,
             }
         results[series] = series_result
+    return results
+
+
+def compute_arch_level_metrics(per_jaw):
+    """Accuracy / F1 / AUC for every method in METHODS, per jaw and pooled - same as
+    compute_method_comparison, but with one ARCH IMAGE as the scoring unit instead of one tooth.
+    compute_method_comparison already answers "how many individual teeth did this method get
+    right"; this answers the coarser, clinically-relevant question "how many whole arch images
+    came back with every tooth right", which per-tooth accuracy can look excellent on while still
+    missing every arch that has exactly one bad tooth.
+
+    Accuracy (Exact Match Ratio): fraction of arches where every tooth's gate_by_tens-gated
+    prediction matches the true digit - i.e. the entire FDI numbering for that arch is correct,
+    not just most of it.
+
+    F1 (sample-averaged / example-based, over FDI-number sets): each arch is treated as one
+    multi-label instance whose "labels" are the FDI numbers present in it. Precision/recall are
+    computed per arch from the overlap between its true FDI-number set and its predicted one
+    (predicted numbers reconstructed from this method's own tens+digit guess, same convention as
+    reconstruct_fdi_predictions - a wrong-quadrant tooth contributes whatever wrong number
+    production would actually show, not the true one), then F1 is computed per arch and averaged
+    across arches - unlike compute_method_comparison's macro F1, which averages per DIGIT CLASS
+    across all teeth pooled together.
+
+    AUC: per-tooth AUC needs one score per class; there's no equivalent per-arch multi-class
+    ranking, so instead this asks a narrower, still useful question - does the model's own
+    confidence signal predict whether the WHOLE arch will come back exactly right? Each arch's
+    score is the minimum per-tooth probability the model assigned to its own (pre-gating) chosen
+    digit across every tooth in that arch - an arch is only as confident as its least-confident
+    tooth. AUC then measures how well that score separates exact-match arches from non-exact
+    ones. NaN wherever a series has only one label value (e.g. every arch is - or isn't - an
+    exact match), the same as compute_method_comparison's per-class AUC guard.
+    """
+    results = {}
+    for series in ("lower", "upper", "pooled"):
+        jaws = ("lower", "upper") if series == "pooled" else (series,)
+
+        series_result = {}
+        for key, label, pred_field, prob_field, tens_pred_field in METHODS:
+            arch_true_sets, arch_pred_sets = {}, {}
+            arch_confidence, arch_exact = {}, {}
+
+            for jaw in jaws:
+                d = per_jaw[jaw]
+                for pred_digit, true_digit, tens_pred, fdi_number, image_name, prob_row in zip(
+                        d[pred_field], d["y_true"], d[tens_pred_field], d["y_fdi_number"],
+                        d["y_image_name"], d[prob_field]):
+                    arch_key = (jaw, image_name)
+                    arch_true_sets.setdefault(arch_key, set()).add(fdi_number)
+                    arch_pred_sets.setdefault(arch_key, set()).add(tens_pred * 10 + (pred_digit + 1))
+
+                    is_correct = pred_digit == true_digit and tens_pred == (fdi_number // 10)
+                    arch_exact[arch_key] = arch_exact.get(arch_key, True) and is_correct
+                    conf = prob_row[pred_digit]
+                    arch_confidence[arch_key] = min(arch_confidence.get(arch_key, 1.0), conf)
+
+            arch_keys = list(arch_true_sets.keys())
+            n_arches = len(arch_keys)
+
+            accuracy = sum(arch_exact[k] for k in arch_keys) / n_arches if n_arches else 0.0
+
+            precision_per_arch, recall_per_arch, f1_per_arch = [], [], []
+            for k in arch_keys:
+                true_set, pred_set = arch_true_sets[k], arch_pred_sets[k]
+                tp = len(true_set & pred_set)
+                if tp == 0:
+                    precision_per_arch.append(0.0)
+                    recall_per_arch.append(0.0)
+                    f1_per_arch.append(0.0)
+                    continue
+                precision = tp / len(pred_set)
+                recall = tp / len(true_set)
+                precision_per_arch.append(precision)
+                recall_per_arch.append(recall)
+                f1_per_arch.append(2 * precision * recall / (precision + recall))
+            precision_avg = sum(precision_per_arch) / n_arches if n_arches else 0.0
+            recall_avg = sum(recall_per_arch) / n_arches if n_arches else 0.0
+            f1 = sum(f1_per_arch) / n_arches if n_arches else 0.0
+
+            labels = [1 if arch_exact[k] else 0 for k in arch_keys]
+            scores = [arch_confidence[k] for k in arch_keys]
+            try:
+                if len(set(labels)) < 2:
+                    raise ValueError("only one class present in this series")
+                auc = roc_auc_score(labels, scores)
+            except ValueError:
+                auc = float("nan")
+
+            series_result[key] = {
+                "label": label, "accuracy": accuracy,
+                "precision": precision_avg, "recall": recall_avg, "f1": f1, "auc": auc,
+            }
+        results[series] = series_result
+    return results
+
+
+def compute_missing_teeth_metrics(per_jaw, pred_key="y_postproc", prob_field="prob_resnet",
+                                   tens_pred_key="y_tens_pred_hungarian", full_arch_size=12):
+    """Same per-arch metrics as compute_arch_level_metrics (Exact-Match Accuracy / sample-averaged
+    Precision, Recall, F1 over FDI-number sets / min-confidence AUC), but bucketed by how many
+    teeth are MISSING from the arch instead of by which method produced the prediction - answers
+    "does this pipeline degrade as more teeth go missing" rather than "which method is best."
+
+    Only evaluates one prediction source (default: production's actual ResNet+Hungarian output),
+    not all of METHODS - splitting all five by missing-count as well would blow up the table for a
+    question ("is the adopted method robust to missing teeth") that only needs the adopted one.
+
+    missing_count for an arch = full_arch_size (12: the FDI last-digit 1-6 x 2 sides this pipeline
+    covers - digits 7/8 aren't in the dataset at all, see the paper's Limitations section) minus
+    however many teeth actually have a GT label in that arch. Returns {missing_count: {n_arches,
+    accuracy, precision, recall, f1, auc}}, sorted by missing_count ascending - buckets with very
+    few arches (check n_arches) should be read cautiously, not over-interpreted.
+    """
+    arch_true_sets, arch_pred_sets = {}, {}
+    arch_confidence, arch_exact = {}, {}
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        for pred_digit, true_digit, tens_pred, fdi_number, image_name, prob_row in zip(
+                d[pred_key], d["y_true"], d[tens_pred_key], d["y_fdi_number"],
+                d["y_image_name"], d[prob_field]):
+            arch_key = (jaw, image_name)
+            arch_true_sets.setdefault(arch_key, set()).add(fdi_number)
+            arch_pred_sets.setdefault(arch_key, set()).add(tens_pred * 10 + (pred_digit + 1))
+
+            is_correct = pred_digit == true_digit and tens_pred == (fdi_number // 10)
+            arch_exact[arch_key] = arch_exact.get(arch_key, True) and is_correct
+            conf = prob_row[pred_digit]
+            arch_confidence[arch_key] = min(arch_confidence.get(arch_key, 1.0), conf)
+
+    buckets = {}
+    for k, true_set in arch_true_sets.items():
+        missing_count = max(full_arch_size - len(true_set), 0)
+        buckets.setdefault(missing_count, []).append(k)
+
+    results = {}
+    for missing_count in sorted(buckets):
+        keys = buckets[missing_count]
+        n_arches = len(keys)
+
+        accuracy = sum(arch_exact[k] for k in keys) / n_arches
+
+        precision_per_arch, recall_per_arch, f1_per_arch = [], [], []
+        for k in keys:
+            true_set, pred_set = arch_true_sets[k], arch_pred_sets[k]
+            tp = len(true_set & pred_set)
+            if tp == 0:
+                precision_per_arch.append(0.0)
+                recall_per_arch.append(0.0)
+                f1_per_arch.append(0.0)
+                continue
+            precision = tp / len(pred_set)
+            recall = tp / len(true_set)
+            precision_per_arch.append(precision)
+            recall_per_arch.append(recall)
+            f1_per_arch.append(2 * precision * recall / (precision + recall))
+
+        labels = [1 if arch_exact[k] else 0 for k in keys]
+        scores = [arch_confidence[k] for k in keys]
+        try:
+            if len(set(labels)) < 2:
+                raise ValueError("only one class present in this bucket")
+            auc = roc_auc_score(labels, scores)
+        except ValueError:
+            auc = float("nan")
+
+        results[missing_count] = {
+            "n_arches": n_arches,
+            "accuracy": accuracy,
+            "precision": sum(precision_per_arch) / n_arches,
+            "recall": sum(recall_per_arch) / n_arches,
+            "f1": sum(f1_per_arch) / n_arches,
+            "auc": auc,
+        }
     return results
 
 
@@ -710,6 +886,29 @@ def main():
         RESULTS_DIR / "tooth_number_method_comparison.png"
     )
 
+    print("\n" + "=" * 70)
+    print("Method comparison (ARCH-LEVEL) - Exact-Match Accuracy / Sample F1 / Confidence AUC")
+    print("=" * 70)
+    arch_method_comparison = compute_arch_level_metrics(per_jaw)
+    for series in ("lower", "upper", "pooled"):
+        for key, label, *_ in METHODS:
+            m = arch_method_comparison[series][key]
+            print(f"{series:6s} {label:20s} acc={m['accuracy']:.4f}  f1={m['f1']:.4f}  auc={m['auc']:.4f}")
+    plot_method_comparison(
+        arch_method_comparison,
+        "Tooth Number Method Comparison - Arch-Level Accuracy / F1 / AUC (Test Set)",
+        RESULTS_DIR / "tooth_number_method_comparison_arch_level.png"
+    )
+
+    print("\n" + "=" * 70)
+    print("ResNet+Hungarian arch-level metrics by missing-tooth count")
+    print("=" * 70)
+    missing_teeth_metrics = compute_missing_teeth_metrics(per_jaw)
+    for missing_count, m in missing_teeth_metrics.items():
+        print(f"missing={missing_count:2d}  n_arches={m['n_arches']:5d}  "
+              f"precision={m['precision']:.4f}  recall={m['recall']:.4f}  "
+              f"f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
+
     per_tooth_keys = ("y_true", "y_resnet", "y_vit", "y_postproc", "y_monodp", "y_greedy",
                        "prob_resnet", "prob_vit", "y_tens_pred",
                        "y_tens_pred_hungarian", "y_fdi_number", "y_image_name")
@@ -717,6 +916,8 @@ def main():
         "tens_digit_accuracy": {"geometry_only": tens_accuracy, "resnet_hungarian": tens_accuracy_hungarian},
         "metrics": {"resnet_only": resnet_metrics, "resnet_hungarian": hungarian_metrics},
         "method_comparison": method_comparison,
+        "arch_level_method_comparison": arch_method_comparison,
+        "missing_teeth_metrics": missing_teeth_metrics,
         "metrics_by_number": number_metrics_by_number,
         "per_jaw": {
             jaw: {k: v for k, v in d.items() if k not in per_tooth_keys}

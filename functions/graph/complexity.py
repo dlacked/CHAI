@@ -119,13 +119,16 @@ def evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset):
     return {"y_true": y_true, "y_pred": y_pred, "n": len(y_true)}
 
 
-def compute_metrics(y_true, y_pred):
-    """F1 (macro, primary)/Accuracy/Precision/Recall for a hard-label prediction."""
+def compute_metrics(y_true, y_pred, labels=None):
+    """F1 (macro, primary)/Accuracy/Precision/Recall for a hard-label prediction. labels pins the
+    macro average to a fixed class set - needed wherever y_pred can contain tooth.py's
+    WRONG_QUADRANT sentinel (6), which never appears in y_true, so leaving labels unset would let
+    sklearn silently add a phantom all-zero class to the average and understate the score."""
     return {
         "accuracy": accuracy_score(y_true, y_pred),
-        "precision": precision_score(y_true, y_pred, average="macro", zero_division=0),
-        "recall": recall_score(y_true, y_pred, average="macro", zero_division=0),
-        "f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
+        "precision": precision_score(y_true, y_pred, labels=labels, average="macro", zero_division=0),
+        "recall": recall_score(y_true, y_pred, labels=labels, average="macro", zero_division=0),
+        "f1": f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0),
     }
 
 
@@ -266,7 +269,7 @@ def plot_metrics_by_group(results, title, out_path, tick_label_fn=str, xlabel="G
     plt.close()
 
 
-def _bucketed_metrics(items):
+def _bucketed_metrics(items, labels=None):
     """items: iterable of (true, pred, bucket_key). Returns {bucket_key: metrics} using
     compute_metrics (no probability scores available this deep in the pipeline - see
     compute_metrics docstring)."""
@@ -274,35 +277,47 @@ def _bucketed_metrics(items):
     for true, pred, key in items:
         buckets[key]["true"].append(true)
         buckets[key]["pred"].append(pred)
-    return {k: compute_metrics(b["true"], b["pred"]) for k, b in sorted(buckets.items())}
+    return {k: compute_metrics(b["true"], b["pred"], labels=labels) for k, b in sorted(buckets.items())}
 
 
-def evaluate_fdi_accuracy_by_complexity(per_jaw, complexity_by_image):
+# Every function below scores against tooth.gate_by_tens(y_postproc, y_tens_pred_hungarian,
+# y_fdi_number) rather than raw y_postproc - a tooth whose predicted FDI *tens* digit was wrong
+# gets replaced with the WRONG_QUADRANT sentinel (6) first, same as every chart in tooth.py. Before
+# this fix these three functions compared y_true directly against y_postproc (last-digit only),
+# so a wrong-quadrant tooth whose last digit happened to still be right was silently scored as a
+# hit here even though tooth.py's own charts (and production) would show it as the wrong FDI
+# number entirely - the complexity/tooth-count breakdowns below now agree with tooth.py instead of
+# quietly assuming GT tens digit like every chart did before this session's tens-gating fix.
+
+
+def evaluate_fdi_accuracy_by_complexity(per_jaw, complexity_by_image, gate_by_tens):
     """Groups the ResNet+Hungarian pipeline's per-tooth FDI-number performance (test set) by
     each arch's ground-truth Arch Complexity, so Accuracy/Precision/Recall/F1 can be read as
     a function of case difficulty rather than just pooled across the whole test set. Takes the
     already-computed tooth.evaluate_tooth_number() result and arch->complexity lookup (see
     main()) instead of recomputing either - both are expensive (a full ResNet forward pass
-    over the test set) and shared with evaluate_arch_accuracy."""
+    over the test set) and shared with evaluate_arch_accuracy. gate_by_tens is tooth.gate_by_tens,
+    passed in rather than imported so this module doesn't need its own copy."""
     per_jaw_by_complexity = {}
     all_items = []
 
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
+        gated_pred = gate_by_tens(d["y_postproc"], d["y_tens_pred_hungarian"], d["y_fdi_number"])
         items = []
-        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_postproc"], d["y_image_name"]):
+        for true_digit, pred_digit, image_name in zip(d["y_true"], gated_pred, d["y_image_name"]):
             complexity = complexity_by_image.get(image_name)
             if complexity is None:
                 continue
             items.append((true_digit, pred_digit, complexity))
-        per_jaw_by_complexity[jaw] = _bucketed_metrics(items)
+        per_jaw_by_complexity[jaw] = _bucketed_metrics(items, labels=list(range(6)))
         all_items.extend(items)
 
-    per_jaw_by_complexity["pooled"] = _bucketed_metrics(all_items)
+    per_jaw_by_complexity["pooled"] = _bucketed_metrics(all_items, labels=list(range(6)))
     return per_jaw_by_complexity
 
 
-def evaluate_fdi_accuracy_by_tooth_count(per_jaw):
+def evaluate_fdi_accuracy_by_tooth_count(per_jaw, gate_by_tens):
     """Same idea as evaluate_fdi_accuracy_by_complexity, but bucketed by how many teeth were
     detected in the arch a tooth came from - fewer detected teeth means a smaller quadrant group
     for the Hungarian duplicate-resolution post-process (ResNet/tooth/postprocess.py) to work
@@ -312,28 +327,29 @@ def evaluate_fdi_accuracy_by_tooth_count(per_jaw):
 
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
+        gated_pred = gate_by_tens(d["y_postproc"], d["y_tens_pred_hungarian"], d["y_fdi_number"])
         tooth_count = defaultdict(int)
         for image_name in d["y_image_name"]:
             tooth_count[image_name] += 1
 
         items = [
             (true_digit, pred_digit, tooth_count[image_name])
-            for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_postproc"], d["y_image_name"])
+            for true_digit, pred_digit, image_name in zip(d["y_true"], gated_pred, d["y_image_name"])
         ]
-        per_jaw_by_count[jaw] = _bucketed_metrics(items)
+        per_jaw_by_count[jaw] = _bucketed_metrics(items, labels=list(range(6)))
         all_items.extend(items)
 
-    per_jaw_by_count["pooled"] = _bucketed_metrics(all_items)
+    per_jaw_by_count["pooled"] = _bucketed_metrics(all_items, labels=list(range(6)))
     return per_jaw_by_count
 
 
-def evaluate_arch_accuracy(per_jaw, complexity_by_image):
-    """For each arch (oral image) in the test set, checks whether EVERY detected tooth's FDI
-    last digit was predicted correctly - a stricter metric than per-tooth accuracy, since one
-    wrong tooth invalidates the whole arch. This is a boolean per-arch flag, not a per-class
-    prediction, so only accuracy is meaningful here (no natural precision/recall/F1 framing).
-    Takes the already-computed tooth.evaluate_tooth_number() result and arch->complexity
-    lookup (see main()) instead of recomputing either.
+def evaluate_arch_accuracy(per_jaw, complexity_by_image, gate_by_tens):
+    """For each arch (oral image) in the test set, checks whether EVERY detected tooth's full FDI
+    number - tens digit included, via gate_by_tens - was predicted correctly - a stricter metric
+    than per-tooth accuracy, since one wrong tooth invalidates the whole arch. This is a boolean
+    per-arch flag, not a per-class prediction, so only accuracy is meaningful here (no natural
+    precision/recall/F1 framing). Takes the already-computed tooth.evaluate_tooth_number() result
+    and arch->complexity lookup (see main()) instead of recomputing either.
 
     Returns (per_jaw_accuracy, per_jaw_by_complexity, per_jaw_by_tooth_count):
       per_jaw_accuracy: {jaw/"pooled": {"accuracy": float, "n": int}} - n is arch count.
@@ -345,8 +361,9 @@ def evaluate_arch_accuracy(per_jaw, complexity_by_image):
     records = []
     for jaw in ("lower", "upper"):
         d = per_jaw[jaw]
+        gated_pred = gate_by_tens(d["y_postproc"], d["y_tens_pred_hungarian"], d["y_fdi_number"])
         arches = defaultdict(lambda: {"correct": True, "count": 0, "complexity": None})
-        for true_digit, pred_digit, image_name in zip(d["y_true"], d["y_postproc"], d["y_image_name"]):
+        for true_digit, pred_digit, image_name in zip(d["y_true"], gated_pred, d["y_image_name"]):
             arch = arches[image_name]
             if true_digit != pred_digit:
                 arch["correct"] = False
@@ -459,7 +476,9 @@ def main():
     print("\n" + "=" * 70)
     print("FDI tooth-number performance by Arch Complexity (ResNet+Hungarian, Test Set)")
     print("=" * 70)
-    fdi_by_complexity = evaluate_fdi_accuracy_by_complexity(per_jaw_tooth_number, complexity_by_image)
+    fdi_by_complexity = evaluate_fdi_accuracy_by_complexity(
+        per_jaw_tooth_number, complexity_by_image, eval_module.gate_by_tens
+    )
     for series, buckets in fdi_by_complexity.items():
         breakdown = ", ".join(f"{COMPLEXITY_CLASS_LABELS.get(c, c)}: f1={m['f1']:.4f} acc={m['accuracy']:.4f}"
                                for c, m in sorted(buckets.items()))
@@ -476,7 +495,7 @@ def main():
     print("\n" + "=" * 70)
     print("FDI tooth-number performance by detected tooth count (ResNet+Hungarian, Test Set)")
     print("=" * 70)
-    fdi_by_tooth_count = evaluate_fdi_accuracy_by_tooth_count(per_jaw_tooth_number)
+    fdi_by_tooth_count = evaluate_fdi_accuracy_by_tooth_count(per_jaw_tooth_number, eval_module.gate_by_tens)
     for series, buckets in fdi_by_tooth_count.items():
         breakdown = ", ".join(f"{c} teeth: f1={m['f1']:.4f} acc={m['accuracy']:.4f}"
                                for c, m in sorted(buckets.items()))
@@ -493,7 +512,7 @@ def main():
     print("Arch-level accuracy (every tooth in the arch correct) - Test Set")
     print("=" * 70)
     arch_accuracy, arch_accuracy_by_complexity, arch_accuracy_by_tooth_count = evaluate_arch_accuracy(
-        per_jaw_tooth_number, complexity_by_image
+        per_jaw_tooth_number, complexity_by_image, eval_module.gate_by_tens
     )
     for jaw, m in arch_accuracy.items():
         print(f"{jaw}: n={m['n']}, accuracy={m['accuracy']:.4f}")
