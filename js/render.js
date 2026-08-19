@@ -432,10 +432,12 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     // the analysis is still loading, just show a pending status - no debug overlay.
     const cached = file ? toothAnalysisCache[file.name] : null;
 
-    // A debug overlay (Segmentation / Held-Karp / Mirroring) owns the canvas when active - the
-    // analysis calls above still run so the sidebar stays live, but the FDI badges themselves
-    // are left to redrawCanvas's overlay dispatch instead of being drawn here.
-    if (cached && cached.status === 'done' && getVizMode() === 'off') {
+    // A debug overlay (Segmentation / Held-Karp / Mirroring / Crop Boxes) owns the canvas when
+    // active - the analysis calls above still run so the sidebar stays live, but the FDI badges
+    // themselves are left to redrawCanvas's overlay dispatch instead of being drawn here. Only
+    // 'off' wants badges drawn here - it's the only mode that shows the normal labeled content.
+    const vizModeNow = getVizMode();
+    if (cached && cached.status === 'done' && vizModeNow === 'off') {
         const tensByVertexIdx = computeHoldingTens(order, cached, predictions, pca, isUpper);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
@@ -455,14 +457,43 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     }
 };
 
-const redrawCanvas = () => {
-    if (!currentImage) return;
-
+// CHAI's own view: draws on the full, unaltered photo, no cropping. Handles both the normal
+// (Off) labeled view and every debug overlay (Segmentation / PCA & Jaw / Held-Karp / Mirroring /
+// Crop Boxes), dispatched on vizMode below. Always resizes the canvas itself (image size + bottom
+// panel).
+const drawFullChaiView = (predictions, fdiByIndex, pca, jawResult, isUpper, hasClassification, file, vizMode) => {
+    canvas.width = currentImage.width;
+    canvas.height = currentImage.height + BOTTOM_PANEL_HEIGHT;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(currentImage, 0, 0);
 
+    if (vizMode === 'off') {
+        drawSegmentation(predictions, fdiByIndex);
+    }
+    drawFdiNumbers(predictions, pca, isUpper, hasClassification, file);
+
+    if (vizMode === 'segmentation') {
+        drawRawSegmentation(predictions);
+    } else if (vizMode === 'pca') {
+        drawPcaJawOverlay(predictions, pca, jawResult);
+    } else if (vizMode === 'heldkarp') {
+        drawHeldKarpOrder(predictions, pca, isUpper);
+    } else if (vizMode === 'mirroring') {
+        drawMirroringOverlay(predictions, pca);
+    } else if (vizMode === 'crop') {
+        drawCropBoxesOverlay(predictions);
+    }
+};
+
+const redrawCanvas = () => {
+    if (!currentImage) return;
+
     // Pipeline Off: just the raw image, no processing and no sidebar info.
     if (!isPipelineOn()) {
+        canvas.width = currentImage.width;
+        canvas.height = currentImage.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(currentImage, 0, 0);
         clearAnalysisResult();
         clearComplexityStatus();
         renderMissingStatus([]);
@@ -475,9 +506,13 @@ const redrawCanvas = () => {
     // Ghorbani/Yoon are self-contained full-image models - no CHAI segmentation, no PCA/Held-Karp
     // arch ordering, no Arch Complexity model of their own (that's CHAI-specific geometry, not
     // part of either paper) - so this branch skips straight to their own /*_predict endpoint and
-    // renders just the FDI-number boxes it returns, no bottom panel (see js/main.js's
-    // resizeCanvasForCurrentModel, which only reserves BOTTOM_PANEL_HEIGHT for the 'chai' branch).
+    // renders just the FDI-number boxes it returns, no bottom panel (only the 'chai' branch below
+    // reserves BOTTOM_PANEL_HEIGHT).
     if (selectedModel !== 'chai') {
+        canvas.width = currentImage.width;
+        canvas.height = currentImage.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(currentImage, 0, 0);
         clearAnalysisResult();
         clearComplexityStatus();
         renderMissingStatus([]);
@@ -510,36 +545,16 @@ const redrawCanvas = () => {
     const isLower = !!(jawResult && !jawResult.isUpper);
     const hasClassification = !!jawResult;
 
-    // Colored tooth regions first, so the number badges drawn by drawFdiNumbers sit on top.
-    // Skipped in favor of the debug overlay below whenever one is selected.
     const fdiByIndex = computeFdiByIndexCore(predictions, pca, isUpper, hasClassification, file);
     const vizMode = getVizMode();
-    if (vizMode === 'off') {
-        drawSegmentation(predictions, fdiByIndex);
-    }
 
-    // Still called unconditionally: this is what kicks off/keeps alive the ResNet+ViT and
-    // Arch Complexity analysis calls (see drawFdiNumbers) regardless of which view is on
-    // screen - only its own badge-drawing is gated on vizMode === 'off'.
-    drawFdiNumbers(predictions, pca, isUpper, hasClassification, file);
-
-    if (vizMode === 'segmentation') {
-        drawRawSegmentation(predictions);
-    } else if (vizMode === 'pca') {
-        drawPcaJawOverlay(predictions, pca, jawResult);
-    } else if (vizMode === 'heldkarp') {
-        drawHeldKarpOrder(predictions, pca, isUpper);
-    } else if (vizMode === 'mirroring') {
-        drawMirroringOverlay(predictions, pca);
-    } else if (vizMode === 'crop') {
-        drawCropBoxesOverlay(predictions);
-    }
+    drawFullChaiView(predictions, fdiByIndex, pca, jawResult, isUpper, hasClassification, file, vizMode);
 
     const missingNumbers = computeMissingTeeth(predictions, pca, isUpper, isLower, hasClassification, file);
     renderMissingStatus(missingNumbers);
 
-    // Drawn unconditionally (not gated on vizMode === 'off') - the panel lives outside the
-    // image itself, so it doesn't compete with any of the debug overlays for the same pixels.
+    // Drawn unconditionally - the panel lives outside the image itself, so it doesn't compete
+    // with any of the debug overlays for the same pixels.
     const complexity = file ? complexityCache[file.name] : null;
     const complexityLabel = complexity && complexity.status === 'done'
         ? (COMPLEXITY_LABELS[complexity.classIdx] ?? null)

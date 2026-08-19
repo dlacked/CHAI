@@ -35,6 +35,7 @@ const getVizMode = () => {
 const modelChaiRadio = document.getElementById('model-chai-radio');
 const modelGhorbaniRadio = document.getElementById('model-ghorbani-radio');
 const modelYoonRadio = document.getElementById('model-yoon-radio');
+const visualizationSidebarSection = document.getElementById('visualization-sidebar-section');
 const getSelectedModel = () => {
     if (modelGhorbaniRadio.checked) return 'ghorbani';
     if (modelYoonRadio.checked) return 'yoon';

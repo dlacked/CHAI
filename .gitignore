@@ -13,3 +13,4 @@ __pycache__/
 comparison/ghorbani/detect_dataset/
 comparison/yoon/coco_dataset/
 comparison/*/runs/
+backups/

@@ -3,18 +3,6 @@ const applyMode = (dark) => {
     localStorage.setItem('darkMode', dark ? '1' : '0');
 };
 
-// Extra height beyond the image's own size reserves the blank strip drawBottomPanel (js/render.js)
-// lists the Complexity class and missing-tooth numbers in - only meaningful for CHAI's own
-// pipeline (Ghorbani/Yoon have no Arch Complexity model, see js/render.js redrawCanvas's non-CHAI
-// branch), so the panel - and the canvas space for it - only exists when CHAI is selected. Called
-// both on image load and whenever the MODELS radio changes, so switching models on an
-// already-loaded image resizes the canvas immediately rather than leaving stale blank space.
-const resizeCanvasForCurrentModel = () => {
-    if (!currentImage) return;
-    canvas.width = currentImage.width;
-    canvas.height = currentImage.height + (getSelectedModel() === 'chai' ? BOTTOM_PANEL_HEIGHT : 0);
-};
-
 const displayImage = (index) => {
     if (index < 0 || index >= imageFiles.length) return;
     const file = imageFiles[index];
@@ -27,8 +15,6 @@ const displayImage = (index) => {
     const img = new Image();
     img.onload = () => {
         currentImage = img;
-        resizeCanvasForCurrentModel();
-
         redrawCanvas();
 
         currentSliceDisplay.textContent = `Image: ${index + 1}/${imageFiles.length}`;
@@ -121,14 +107,22 @@ pipelineOffRadio.addEventListener('change', () => {
     redrawCanvas();
 });
 
-// Switching models resizes the canvas (see resizeCanvasForCurrentModel) before redrawing, since
-// only CHAI reserves bottom-panel space - Ghorbani/Yoon's own analysis call (if not already
-// cached for this file) is triggered from inside redrawCanvas's non-CHAI branch, same lazy-fetch
-// pattern as segmentImage/runToothAnalysis.
+// Ghorbani/Yoon ignore VISUALIZATION entirely already (redrawCanvas's non-CHAI branch always
+// draws their own boxes regardless of vizMode) - hiding the section too when either is selected
+// keeps the sidebar from offering controls that silently do nothing for the current model.
+const updateVisualizationSectionVisibility = () => {
+    visualizationSidebarSection.style.display = getSelectedModel() === 'chai' ? '' : 'none';
+};
+updateVisualizationSectionVisibility();
+
+// redrawCanvas sizes the canvas itself for whichever model/view is now selected (full image,
+// tight-cropped CHAI view, or the non-CHAI branch's own sizing) - no separate resize step needed
+// here. Ghorbani/Yoon's own analysis call (if not already cached for this file) is triggered from
+// inside redrawCanvas's non-CHAI branch, same lazy-fetch pattern as segmentImage/runToothAnalysis.
 [modelChaiRadio, modelGhorbaniRadio, modelYoonRadio].forEach(radio => {
     radio.addEventListener('change', () => {
         if (!radio.checked) return;
-        resizeCanvasForCurrentModel();
+        updateVisualizationSectionVisibility();
         redrawCanvas();
     });
 });

@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import base64
 import importlib.util
@@ -12,6 +13,12 @@ from flask_cors import CORS
 
 # Load config path if needed, or define locally for simplicity
 ROOT = Path(__file__).resolve().parent
+
+# Skips loading the comparison-paper reproductions (Ghorbani's YOLO detect+classify, Yoon's
+# ResNet-101 Cascade R-CNN) - useful when a training run (e.g. Yoon's) already has the GPU mostly
+# full and this server is only needed to check something CHAI-only (like the Tight Crop / PCA-
+# Aligned Crop rendering), since neither reproduction is involved in CHAI's own pipeline at all.
+SKIP_COMPARISON_MODELS = os.environ.get("SKIP_COMPARISON_MODELS") == "1"
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
@@ -129,55 +136,59 @@ ghorbani_module = None
 ghorbani_detect_model = None
 ghorbani_classify_model = None
 ghorbani_eval_transform = None
-try:
-    sys.path.insert(0, str(GHORBANI_DIR))
-    _ghorbani_spec = importlib.util.spec_from_file_location("ghorbani_evaluate", str(GHORBANI_DIR / "evaluate.py"))
-    ghorbani_module = importlib.util.module_from_spec(_ghorbani_spec)
-    _ghorbani_spec.loader.exec_module(ghorbani_module)
-
-    ghorbani_detect_model = YOLO(str(ghorbani_module.find_latest_detect_weights()))
-
-    classify_ckpt = GHORBANI_DIR / "model" / "classify_best.pth"
-    if classify_ckpt.exists():
-        ghorbani_classify_model = ghorbani_module.build_model(device)
-        ghorbani_classify_model.load_state_dict(torch.load(classify_ckpt, map_location=device))
-        ghorbani_classify_model.eval()
-        ghorbani_eval_transform = transforms.Compose([
-            transforms.Resize((ghorbani_module.IMG_SIZE, ghorbani_module.IMG_SIZE)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        print("Ghorbani reproduction models loaded.")
-    else:
-        print(f"Ghorbani classify checkpoint not found at {classify_ckpt}; /ghorbani_predict disabled.")
-except Exception as e:
-    print(f"Ghorbani reproduction models not available: {e}")
-
 yoon_model = None
 yoon_inference_detector = None
-try:
-    from mmdet.apis import init_detector as _yoon_init_detector, inference_detector as _yoon_inference_detector
-    sys.path.insert(0, str(YOON_DIR))
-    _yoon_spec = importlib.util.spec_from_file_location("yoon_evaluate", str(YOON_DIR / "evaluate.py"))
-    _yoon_evaluate_module = importlib.util.module_from_spec(_yoon_spec)
-    _yoon_spec.loader.exec_module(_yoon_evaluate_module)
-
-    yoon_checkpoint = _yoon_evaluate_module.find_checkpoint(None)
-    yoon_model = _yoon_init_detector(str(YOON_DIR / "config.py"), yoon_checkpoint, device=str(device))
-    yoon_inference_detector = _yoon_inference_detector
-    print(f"Yoon reproduction model loaded from {yoon_checkpoint}.")
-except (Exception, SystemExit) as e:
-    # find_checkpoint raises SystemExit (not Exception) when no checkpoint exists yet - training
-    # may still be in progress, so this endpoint just stays disabled rather than crashing startup.
-    print(f"Yoon reproduction model not available: {e}")
-    yoon_model = None
-
-# Both reproductions were trained on the same 24 full two-digit FDI numbers CHAI's own dataset
-# has GT for (11-16/21-26/31-36/41-46) - see comparison/ghorbani/train_classify.py and
-# comparison/yoon/prepare_coco_labels.py's docstrings for why (no primary teeth, no 7/8 wisdom
-# teeth in this dataset). Class index -> FDI number for Yoon's detector output; Ghorbani's own
-# FDI_CLASSES (identically ordered) comes from ghorbani_module directly.
+# Class index -> FDI number for Yoon's detector output; Ghorbani's own FDI_CLASSES (identically
+# ordered) comes from ghorbani_module directly. Defined unconditionally (cheap, no GPU/model
+# involved) so /yoon_predict's own code can still reference it even when SKIP_COMPARISON_MODELS
+# left yoon_model as None.
 YOON_FDI_CLASSES = [q * 10 + d for q in (1, 2, 3, 4) for d in range(1, 7)]
+
+if SKIP_COMPARISON_MODELS:
+    print("SKIP_COMPARISON_MODELS=1 - /ghorbani_predict and /yoon_predict disabled, nothing "
+          "extra loaded onto the GPU (useful when a training run already has it mostly full).")
+else:
+    try:
+        sys.path.insert(0, str(GHORBANI_DIR))
+        _ghorbani_spec = importlib.util.spec_from_file_location("ghorbani_evaluate", str(GHORBANI_DIR / "evaluate.py"))
+        ghorbani_module = importlib.util.module_from_spec(_ghorbani_spec)
+        _ghorbani_spec.loader.exec_module(ghorbani_module)
+
+        ghorbani_detect_model = YOLO(str(ghorbani_module.find_latest_detect_weights()))
+
+        classify_ckpt = GHORBANI_DIR / "model" / "classify_best.pth"
+        if classify_ckpt.exists():
+            ghorbani_classify_model = ghorbani_module.build_model(device)
+            ghorbani_classify_model.load_state_dict(torch.load(classify_ckpt, map_location=device))
+            ghorbani_classify_model.eval()
+            ghorbani_eval_transform = transforms.Compose([
+                transforms.Resize((ghorbani_module.IMG_SIZE, ghorbani_module.IMG_SIZE)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+            print("Ghorbani reproduction models loaded.")
+        else:
+            print(f"Ghorbani classify checkpoint not found at {classify_ckpt}; /ghorbani_predict disabled.")
+    except Exception as e:
+        print(f"Ghorbani reproduction models not available: {e}")
+
+    try:
+        from mmdet.apis import init_detector as _yoon_init_detector, inference_detector as _yoon_inference_detector
+        sys.path.insert(0, str(YOON_DIR))
+        _yoon_spec = importlib.util.spec_from_file_location("yoon_evaluate", str(YOON_DIR / "evaluate.py"))
+        _yoon_evaluate_module = importlib.util.module_from_spec(_yoon_spec)
+        _yoon_spec.loader.exec_module(_yoon_evaluate_module)
+
+        yoon_checkpoint = _yoon_evaluate_module.find_checkpoint(None)
+        yoon_model = _yoon_init_detector(str(YOON_DIR / "config.py"), yoon_checkpoint, device=str(device))
+        yoon_inference_detector = _yoon_inference_detector
+        print(f"Yoon reproduction model loaded from {yoon_checkpoint}.")
+    except (Exception, SystemExit) as e:
+        # find_checkpoint raises SystemExit (not Exception) when no checkpoint exists yet -
+        # training may still be in progress, so this endpoint just stays disabled rather than
+        # crashing startup.
+        print(f"Yoon reproduction model not available: {e}")
+        yoon_model = None
 
 
 # Preprocessing transforms (must match ResNet/tooth/train.py validation transforms)
