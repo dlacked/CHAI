@@ -324,6 +324,54 @@
         "auc": NaN
       }
     },
+    "missing_vs_complete_by_model": {
+      "CHAI (ResNet+Hungarian)": {
+        "complete": {
+          "n_arches": 6079,
+          "accuracy": 1.0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "auc": NaN
+        },
+        "missing": {
+          "n_arches": 1073,
+          "accuracy": 0.9757688723205965,
+          "precision": 0.9977209184105735,
+          "recall": 0.9977209184105735,
+          "f1": 0.9977209184105735,
+          "auc": 0.768385864374403
+        }
+      }
+    },
+    "arch_level_by_complexity_by_model": {
+      "CHAI (ResNet+Hungarian)": {
+        "1": {
+          "n_arches": 1928,
+          "accuracy": 0.9937759336099585,
+          "precision": 0.999429460580913,
+          "recall": 0.999429460580913,
+          "f1": 0.999429460580913,
+          "auc": 0.9077070285316633
+        },
+        "2": {
+          "n_arches": 3021,
+          "accuracy": 0.9966898378020523,
+          "precision": 0.9996750022569291,
+          "recall": 0.9996750022569291,
+          "f1": 0.9996750022569291,
+          "auc": 0.9636001328462304
+        },
+        "3": {
+          "n_arches": 2203,
+          "accuracy": 0.9981842941443486,
+          "precision": 0.9998349358313046,
+          "recall": 0.9998349358313046,
+          "f1": 0.9998349358313046,
+          "auc": 0.9564574806730333
+        }
+      }
+    },
     "metrics_by_number": {
       "accuracy": {
         "11": 1.0,

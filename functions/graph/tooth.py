@@ -26,6 +26,7 @@ import torch
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support,
     roc_auc_score, confusion_matrix, ConfusionMatrixDisplay,
@@ -432,8 +433,8 @@ def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template, ten
         gated_pred = gate_by_tens(data[pred_key], data[tens_pred_key], data["y_fdi_number"])
         cm = confusion_matrix(data["y_true"], gated_pred, labels=list(range(7)))
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DIGIT_DISPLAY_LABELS)
-        fig, ax = plt.subplots(figsize=(7, 6), facecolor=SURFACE)
-        disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
+        fig, ax = plt.subplots(figsize=(7.8, 6), facecolor=SURFACE)
+        disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True)
         ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({label})", color=INK)
         plt.tight_layout()
         out_path = Path(str(out_path_template).format(jaw=jaw))
@@ -703,6 +704,205 @@ def compute_missing_teeth_metrics(per_jaw, pred_key="y_postproc", prob_field="pr
     return results
 
 
+def compute_missing_vs_complete_metrics(per_jaw, pred_key="y_postproc", prob_field="prob_resnet",
+                                         tens_pred_key="y_tens_pred_hungarian", full_arch_size=12):
+    """Same per-arch metrics as compute_missing_teeth_metrics, collapsed into just two groups -
+    "complete" (0 missing teeth) vs "missing" (>=1 missing) - instead of one bucket per exact
+    missing count. Meant as a robustness comparison that stays legible once other models/methods
+    are added as extra bars later (see plot_missing_vs_complete) - the finer per-count breakdown
+    gets cluttered fast once more than one series is on the same chart, and several of its higher
+    counts have too few arches to compare across models anyway (see tab:missing_teeth's own
+    caveat about the 3+ buckets).
+
+    Recomputes from per_jaw directly (not by merging compute_missing_teeth_metrics's per-count
+    output) so precision/recall/f1 stay sample-averaged over the arches actually in each of the
+    two groups, not an average-of-averages across missing counts.
+    """
+    arch_true_sets, arch_pred_sets = {}, {}
+    arch_confidence, arch_exact = {}, {}
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        for pred_digit, true_digit, tens_pred, fdi_number, image_name, prob_row in zip(
+                d[pred_key], d["y_true"], d[tens_pred_key], d["y_fdi_number"],
+                d["y_image_name"], d[prob_field]):
+            arch_key = (jaw, image_name)
+            arch_true_sets.setdefault(arch_key, set()).add(fdi_number)
+            arch_pred_sets.setdefault(arch_key, set()).add(tens_pred * 10 + (pred_digit + 1))
+
+            is_correct = pred_digit == true_digit and tens_pred == (fdi_number // 10)
+            arch_exact[arch_key] = arch_exact.get(arch_key, True) and is_correct
+            conf = prob_row[pred_digit]
+            arch_confidence[arch_key] = min(arch_confidence.get(arch_key, 1.0), conf)
+
+    groups = {"complete": [], "missing": []}
+    for k, true_set in arch_true_sets.items():
+        missing_count = max(full_arch_size - len(true_set), 0)
+        groups["complete" if missing_count == 0 else "missing"].append(k)
+
+    results = {}
+    for group_name in ("complete", "missing"):
+        keys = groups[group_name]
+        n_arches = len(keys)
+        if n_arches == 0:
+            results[group_name] = {"n_arches": 0, "accuracy": 0.0, "precision": 0.0,
+                                    "recall": 0.0, "f1": 0.0, "auc": float("nan")}
+            continue
+
+        accuracy = sum(arch_exact[k] for k in keys) / n_arches
+
+        precision_per_arch, recall_per_arch, f1_per_arch = [], [], []
+        for k in keys:
+            true_set, pred_set = arch_true_sets[k], arch_pred_sets[k]
+            tp = len(true_set & pred_set)
+            if tp == 0:
+                precision_per_arch.append(0.0)
+                recall_per_arch.append(0.0)
+                f1_per_arch.append(0.0)
+                continue
+            precision = tp / len(pred_set)
+            recall = tp / len(true_set)
+            precision_per_arch.append(precision)
+            recall_per_arch.append(recall)
+            f1_per_arch.append(2 * precision * recall / (precision + recall))
+
+        labels = [1 if arch_exact[k] else 0 for k in keys]
+        scores = [arch_confidence[k] for k in keys]
+        try:
+            if len(set(labels)) < 2:
+                raise ValueError("only one class present in this group")
+            auc = roc_auc_score(labels, scores)
+        except ValueError:
+            auc = float("nan")
+
+        results[group_name] = {
+            "n_arches": n_arches,
+            "accuracy": accuracy,
+            "precision": sum(precision_per_arch) / n_arches,
+            "recall": sum(recall_per_arch) / n_arches,
+            "f1": sum(f1_per_arch) / n_arches,
+            "auc": auc,
+        }
+    return results
+
+
+def compute_arch_metrics_by_complexity(per_jaw, complexity_by_image, pred_key="y_postproc",
+                                        prob_field="prob_resnet", tens_pred_key="y_tens_pred_hungarian"):
+    """Same per-arch metrics as compute_missing_vs_complete_metrics, bucketed by each arch's
+    ground-truth Arch Complexity class (1/2/3, from AIHub's metadata.json - see
+    ViT/complexity/build_dataset.py's load_complexity_labels) instead of missing-tooth status -
+    answers "does whole-arch exact-match performance hold up as malocclusion severity increases"
+    rather than "...as teeth go missing." Returns {complexity_class: metrics}, keyed 1/2/3 so it
+    slots into plot_grouped_model_comparison the same way compute_missing_vs_complete_metrics's
+    output does."""
+    arch_true_sets, arch_pred_sets = {}, {}
+    arch_confidence, arch_exact, arch_complexity = {}, {}, {}
+
+    for jaw in ("lower", "upper"):
+        d = per_jaw[jaw]
+        for pred_digit, true_digit, tens_pred, fdi_number, image_name, prob_row in zip(
+                d[pred_key], d["y_true"], d[tens_pred_key], d["y_fdi_number"],
+                d["y_image_name"], d[prob_field]):
+            arch_key = (jaw, image_name)
+            arch_true_sets.setdefault(arch_key, set()).add(fdi_number)
+            arch_pred_sets.setdefault(arch_key, set()).add(tens_pred * 10 + (pred_digit + 1))
+
+            is_correct = pred_digit == true_digit and tens_pred == (fdi_number // 10)
+            arch_exact[arch_key] = arch_exact.get(arch_key, True) and is_correct
+            conf = prob_row[pred_digit]
+            arch_confidence[arch_key] = min(arch_confidence.get(arch_key, 1.0), conf)
+            if arch_key not in arch_complexity:
+                arch_complexity[arch_key] = complexity_by_image.get(image_name)
+
+    buckets = {}
+    for k in arch_true_sets:
+        c = arch_complexity.get(k)
+        if c is None:
+            continue
+        buckets.setdefault(c, []).append(k)
+
+    results = {}
+    for complexity_class in sorted(buckets):
+        keys = buckets[complexity_class]
+        n_arches = len(keys)
+
+        accuracy = sum(arch_exact[k] for k in keys) / n_arches
+
+        precision_per_arch, recall_per_arch, f1_per_arch = [], [], []
+        for k in keys:
+            true_set, pred_set = arch_true_sets[k], arch_pred_sets[k]
+            tp = len(true_set & pred_set)
+            if tp == 0:
+                precision_per_arch.append(0.0)
+                recall_per_arch.append(0.0)
+                f1_per_arch.append(0.0)
+                continue
+            precision = tp / len(pred_set)
+            recall = tp / len(true_set)
+            precision_per_arch.append(precision)
+            recall_per_arch.append(recall)
+            f1_per_arch.append(2 * precision * recall / (precision + recall))
+
+        labels = [1 if arch_exact[k] else 0 for k in keys]
+        scores = [arch_confidence[k] for k in keys]
+        try:
+            if len(set(labels)) < 2:
+                raise ValueError("only one class present in this bucket")
+            auc = roc_auc_score(labels, scores)
+        except ValueError:
+            auc = float("nan")
+
+        results[complexity_class] = {
+            "n_arches": n_arches,
+            "accuracy": accuracy,
+            "precision": sum(precision_per_arch) / n_arches,
+            "recall": sum(recall_per_arch) / n_arches,
+            "f1": sum(f1_per_arch) / n_arches,
+            "auc": auc,
+        }
+    return results
+
+
+def plot_grouped_model_comparison(results_by_model, group_order, group_labels, title, out_path):
+    """5 stacked panels (Precision/Recall/F1/Accuracy/AUC), each a grouped bar chart: one group
+    per bucket in group_order (e.g. missing-tooth status from compute_missing_vs_complete_metrics,
+    or Arch Complexity class from compute_arch_metrics_by_complexity), one bar per model in
+    results_by_model. Takes {model_label: {group_key: metrics}} so adding another model later
+    (e.g. the comparison/ghorbani or comparison/nguyen reproductions, once they have their own
+    arch-level predictions to bucket the same way) is just adding another key to that dict and
+    replotting - a small, fixed set of groups on the x-axis is what keeps this legible once more
+    than one model's bars share the same chart, unlike a finer per-count/per-value breakdown."""
+    metric_keys = [("precision", "Precision"), ("recall", "Recall"), ("f1", "F1 (Sample-avg)"),
+                   ("accuracy", "Accuracy (Exact-Match)"), ("auc", "AUC")]
+    model_keys = list(results_by_model.keys())
+    palette = [BLUE, ORANGE, PURPLE, TEAL, PINK]
+
+    x = list(range(len(group_order)))
+    n_series = len(model_keys)
+    bar_width = 0.8 / max(n_series, 1)
+
+    fig, axes = plt.subplots(len(metric_keys), 1, figsize=(7.5, 4.2 * len(metric_keys)), facecolor=SURFACE)
+    for ax, (metric_key, metric_label) in zip(axes, metric_keys):
+        for i, model_key in enumerate(model_keys):
+            offsets = [xi + (i - (n_series - 1) / 2) * bar_width for xi in x]
+            values = [results_by_model[model_key][g][metric_key] for g in group_order]
+            bars = ax.bar(offsets, values, width=bar_width, color=palette[i % len(palette)],
+                           label=model_key, zorder=3)
+            annotate_bars(ax, bars)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(group_labels)
+        ax.set_ylim(0, 1.08)
+        ax.set_ylabel(metric_label, color=INK)
+        ax.legend(frameon=False, labelcolor=INK, fontsize=8)
+        style_axes(ax)
+
+    fig.suptitle(title, color=INK, y=0.995)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
+    plt.close()
+
+
 def plot_method_comparison(comparison, title, out_path):
     """Three stacked panels (Accuracy / F1 / AUC), each a grouped bar chart: one group per
     series (Lower / Upper / Pooled jaw), one bar per method (METHODS)."""
@@ -763,17 +963,38 @@ def plot_tooth_number_confusion_by_fdi(per_jaw, title, out_path, pred_key="y_pos
     prediction, reconstructed the same way compute_tooth_number_metrics_by_number's per-number
     breakdown is. Unlike that per-number accuracy/precision/recall bar chart, this shows exactly
     which OTHER number a miss gets confused with (e.g. is 14 mistaken for 13 or for 15?),
-    not just that 14's own hit-rate dropped."""
+    not just that 14's own hit-rate dropped.
+
+    Also saves a row-normalized ("{out_path.stem}_pct.png") companion: raw counts are dominated
+    by the large diagonal of common numbers, which buries how a rare number's few instances
+    split across error types - normalizing each true-label row to sum to 100% puts every FDI
+    number on the same scale regardless of how many test instances it had."""
     fdi_labels = [n for n in ALL_FDI_NUMBERS if 1 <= n % 10 <= 6]
     all_true_fdi, all_pred_fdi = reconstruct_fdi_predictions(per_jaw, pred_key, tens_pred_key)
 
     cm = confusion_matrix(all_true_fdi, all_pred_fdi, labels=fdi_labels)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[str(n) for n in fdi_labels])
-    fig, ax = plt.subplots(figsize=(13, 13), facecolor=SURFACE)
-    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False, xticks_rotation=90, values_format="d")
+    fig, ax = plt.subplots(figsize=(13.8, 13), facecolor=SURFACE)
+    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, xticks_rotation=90, values_format="d")
     ax.set_title(title, color=INK)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, facecolor=SURFACE)
+    plt.close()
+
+    cm_pct = confusion_matrix(all_true_fdi, all_pred_fdi, labels=fdi_labels, normalize="true") * 100
+    disp_pct = ConfusionMatrixDisplay(confusion_matrix=cm_pct, display_labels=[str(n) for n in fdi_labels])
+    fig, ax = plt.subplots(figsize=(13.8, 13), facecolor=SURFACE)
+    # A linear 0-100 color scale makes the small off-diagonal error percentages (often <1%)
+    # indistinguishable from 0 next to the ~100% diagonal. PowerNorm(gamma<1) compresses the
+    # high end and stretches the low end instead, so a cell at 0.1-0.2% still gets visible color
+    # rather than reading as pure white - gamma=0.35 chosen empirically to keep small-but-real
+    # error rates visible without also making 0% cells look colored.
+    disp_pct.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, xticks_rotation=90, values_format=".1f",
+                   im_kw={"norm": PowerNorm(gamma=0.35, vmin=0, vmax=100)})
+    ax.set_title(f"{title} (%)", color=INK)
+    plt.tight_layout()
+    pct_path = out_path.with_name(f"{out_path.stem}_pct{out_path.suffix}")
+    plt.savefig(pct_path, dpi=150, facecolor=SURFACE)
     plt.close()
 
 
@@ -909,6 +1130,50 @@ def main():
               f"precision={m['precision']:.4f}  recall={m['recall']:.4f}  "
               f"f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
 
+    print("\n" + "=" * 70)
+    print("ResNet+Hungarian arch-level metrics: complete vs missing-tooth arches")
+    print("=" * 70)
+    missing_vs_complete = compute_missing_vs_complete_metrics(per_jaw)
+    for group_name, m in missing_vs_complete.items():
+        print(f"{group_name:10s} n_arches={m['n_arches']:5d}  "
+              f"precision={m['precision']:.4f}  recall={m['recall']:.4f}  "
+              f"f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
+    # Keyed by model label rather than a bare metrics dict so a later run can add
+    # comparison/ghorbani's or comparison/nguyen's own {group: metrics} under their own key and
+    # replot the same chart with multiple models' bars side by side (see
+    # plot_grouped_model_comparison's docstring).
+    missing_vs_complete_by_model = {"CHAI (ResNet+Hungarian)": missing_vs_complete}
+    plot_grouped_model_comparison(
+        missing_vs_complete_by_model,
+        group_order=["complete", "missing"],
+        group_labels=["Complete\n(0 missing)", "Missing\n(≥ 1)"],
+        title="Arch-Level Robustness: Complete vs Missing-Tooth Arches (Test Set)",
+        out_path=RESULTS_DIR / "tooth_number_missing_vs_complete.png"
+    )
+
+    print("\n" + "=" * 70)
+    print("ResNet+Hungarian arch-level metrics by Arch Complexity class")
+    print("=" * 70)
+    complexity_build = load_module(
+        "vit_complexity_build_eval_2", PROJECT_ROOT / "ViT" / "complexity" / "build_dataset.py"
+    )
+    complexity_by_image = complexity_build.load_complexity_labels(DATASET_DIR, "test")
+    arch_by_complexity = compute_arch_metrics_by_complexity(per_jaw, complexity_by_image)
+    complexity_class_labels = {1: "Class I", 2: "Class II", 3: "Class III"}
+    for complexity_class, m in arch_by_complexity.items():
+        print(f"{complexity_class_labels.get(complexity_class, complexity_class):10s} "
+              f"n_arches={m['n_arches']:5d}  precision={m['precision']:.4f}  "
+              f"recall={m['recall']:.4f}  f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
+
+    arch_by_complexity_by_model = {"CHAI (ResNet+Hungarian)": arch_by_complexity}
+    plot_grouped_model_comparison(
+        arch_by_complexity_by_model,
+        group_order=[2, 3],
+        group_labels=["Class II", "Class III"],
+        title="Arch-Level Robustness by Arch Complexity Class (Test Set)",
+        out_path=RESULTS_DIR / "tooth_number_arch_level_by_complexity.png"
+    )
+
     per_tooth_keys = ("y_true", "y_resnet", "y_vit", "y_postproc", "y_monodp", "y_greedy",
                        "prob_resnet", "prob_vit", "y_tens_pred",
                        "y_tens_pred_hungarian", "y_fdi_number", "y_image_name")
@@ -918,6 +1183,8 @@ def main():
         "method_comparison": method_comparison,
         "arch_level_method_comparison": arch_method_comparison,
         "missing_teeth_metrics": missing_teeth_metrics,
+        "missing_vs_complete_by_model": missing_vs_complete_by_model,
+        "arch_level_by_complexity_by_model": arch_by_complexity_by_model,
         "metrics_by_number": number_metrics_by_number,
         "per_jaw": {
             jaw: {k: v for k, v in d.items() if k not in per_tooth_keys}

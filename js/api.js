@@ -170,6 +170,48 @@ const runComplexityAnalysis = (file, jaw, teeth) => {
         });
 };
 
+// Shared by runGhorbaniAnalysis/runYoonAnalysis: both endpoints are self-contained full-image
+// models (no CHAI segmentation step, no per-tooth crop request) that take the raw file directly
+// and return {box, fdi_number, confidence} per detection - see server.py's /ghorbani_predict,
+// /yoon_predict. Caches by file.name like every other analysis cache in this file, and redraws
+// once the result (or an error) lands so js/render.js's non-CHAI redrawCanvas branch can pick it
+// up.
+const runExternalModelAnalysis = (file, label, endpoint, cache) => {
+    const existing = cache[file.name];
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        redrawCanvas();
+        return;
+    }
+
+    cache[file.name] = { status: 'loading' };
+    redrawCanvas();
+
+    const formData = new FormData();
+    formData.append('image', file);
+
+    fetch(endpoint, { method: 'POST', body: formData })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                cache[file.name] = { status: 'done', predictions: data.predictions };
+            } else {
+                cache[file.name] = { status: 'error', error: data.error };
+                console.error(`${label} analysis error:`, data.error);
+            }
+            redrawCanvas();
+        })
+        .catch(error => {
+            cache[file.name] = { status: 'error', error: String(error) };
+            console.error('Server offline or network error:', error);
+            redrawCanvas();
+        });
+};
+
+const runGhorbaniAnalysis = (file) =>
+    runExternalModelAnalysis(file, 'Ghorbani', '/ghorbani_predict', ghorbaniAnalysisCache);
+const runYoonAnalysis = (file) =>
+    runExternalModelAnalysis(file, 'Yoon', '/yoon_predict', yoonAnalysisCache);
+
 // For every detected tooth, sends its crop + independent variables (x1, y1, x2, y2, theta -
 // computed the same way as the GT feature extraction pipeline in functions/features/) to the
 // ResNet Tooth model and caches the full 6-class probability vector for each tooth, ordered

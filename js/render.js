@@ -1,62 +1,57 @@
-// Draws a black badge with a '#' prefix + FDI tooth number (white prefix, bright green
-// number) centered at the given point.
+// Bottom panel height added onto the canvas beyond the image's own natural height (see
+// js/main.js's canvas sizing and redrawCanvas below) - blank strip reserved for drawBottomPanel's
+// single-line Complexity/Missing summary, kept separate from the image so it never overlaps tooth
+// badges or (more importantly) the exact gap/crowding region that text is describing.
+const BOTTOM_PANEL_HEIGHT = 110;
+
+// Draws a black badge with a '#' prefix + FDI tooth number (white border, white prefix, white
+// number - all-white so the badge reads as neutral labeling rather than status/color-coding).
 const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
-    const boxWidth = 114;
-    const boxHeight = 75;
+    const boxWidth = 180;
+    const boxHeight = 118;
     const rx = centerX - boxWidth / 2;
     const ry = centerY - boxHeight / 2;
 
     ctx.beginPath();
     if (typeof ctx.roundRect === 'function') {
-        ctx.roundRect(rx, ry, boxWidth, boxHeight, 12);
+        ctx.roundRect(rx, ry, boxWidth, boxHeight, 16);
     } else {
         ctx.rect(rx, ry, boxWidth, boxHeight);
     }
     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
     ctx.fill();
-    ctx.strokeStyle = '#39ff14';
-    ctx.lineWidth = 2.7;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3.5;
     ctx.stroke();
 
-    ctx.font = 'bold 45px sans-serif';
+    ctx.font = 'bold 72px sans-serif';
     const numWidth = ctx.measureText(numText).width;
-    ctx.font = 'bold 24px sans-serif';
+    ctx.font = 'bold 38px sans-serif';
     const prefixWidth = prefix ? ctx.measureText(prefix).width : 0;
 
-    const spacing = prefix ? 3 : 0;
+    const spacing = prefix ? 5 : 0;
     const totalWidth = prefixWidth + spacing + numWidth;
     const startX = centerX - totalWidth / 2;
 
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
 
-    // Draw the prefix in small font (white), if any
+    // Draw the prefix in small font, if any
     if (prefix) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 24px sans-serif';
+        ctx.font = 'bold 38px sans-serif';
         ctx.fillText(prefix, startX, centerY + 1);
     }
 
-    // Draw the number/notation in large font (bright green)
-    ctx.fillStyle = '#39ff14';
-    ctx.font = 'bold 45px sans-serif';
+    // Draw the number/notation in large font
+    ctx.font = 'bold 72px sans-serif';
     ctx.fillText(numText, startX + prefixWidth + spacing, centerY + 1);
-};
-
-// Each tooth's color is derived from its FDI number itself (not its array index) via
-// golden-ratio hue distribution, so tooth #36 is always the same color across frames/images
-// instead of shifting with detection order
-const getFdiToothColor = (fdiNumber) => {
-    const hue = (fdiNumber * 137.5) % 360;
-    return {
-        fill: `hsla(${hue}, 70%, 50%, 0.45)`,
-        stroke: `hsla(${hue}, 70%, 50%, 0.95)`
-    };
 };
 
 // Fills/outlines each detected tooth's segmented region once its FDI number is known - teeth
 // without a number yet are left unfilled. Drawn before the number badges so the badges sit on
-// top of the colored regions.
+// top of the colored regions. Every tooth uses the same white fill/stroke rather than a
+// per-number color - the FDI badge text is what identifies each tooth, not region color.
 const drawSegmentation = (predictions, fdiByIndex) => {
     if (!predictions || predictions.length === 0 || !fdiByIndex) return;
 
@@ -74,12 +69,10 @@ const drawSegmentation = (predictions, fdiByIndex) => {
         }
         ctx.closePath();
 
-        const { fill, stroke } = getFdiToothColor(fdiNumber);
-
-        ctx.fillStyle = fill;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
         ctx.fill();
 
-        ctx.strokeStyle = stroke;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
         ctx.lineWidth = 3;
         ctx.stroke();
     });
@@ -189,6 +182,92 @@ const drawMirroringOverlay = (predictions, pca) => {
     ctx.setLineDash([]);
 };
 
+// "PCA & Jaw" debug view: the two earliest pipeline stages, drawn together since jaw
+// classification (classifyJawByCurvature) is computed directly from the PCA frame this draws -
+// each tooth's centroid (yellow dot, the input classifyJawByCurvature/PCA both reduce every
+// tooth to), the PCA principal axis itself (blue line through pca.center at pca.angle - the
+// arch's estimated main direction, distinct from drawMirroringOverlay's perpendicular midline),
+// and the resulting Upper/Lower label with the parabola's leading coefficient `a` (whose sign is
+// the entire classification rule - see classifyJawByCurvature's docstring).
+const drawPcaJawOverlay = (predictions, pca, jawResult) => {
+    if (!predictions || predictions.length === 0 || !pca || !currentImage) return;
+
+    predictions.forEach(pred => {
+        const centroid = computeCentroid(pred.polygon);
+        ctx.beginPath();
+        ctx.arc(centroid.x, centroid.y, 9, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffeb3b';
+        ctx.fill();
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    });
+
+    const dx = Math.cos(pca.angle);
+    const dy = Math.sin(pca.angle);
+    const len = Math.max(currentImage.width, currentImage.height);
+    ctx.beginPath();
+    ctx.moveTo(pca.center.x - dx * len, pca.center.y - dy * len);
+    ctx.lineTo(pca.center.x + dx * len, pca.center.y + dy * len);
+    ctx.strokeStyle = '#2196f3';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(pca.center.x, pca.center.y, 11, 0, Math.PI * 2);
+    ctx.fillStyle = '#2196f3';
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    if (jawResult) {
+        const text = `${jawResult.isUpper ? 'UPPER' : 'LOWER'}  (a = ${jawResult.a.toExponential(2)})`;
+        ctx.font = 'bold 34px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const textWidth = ctx.measureText(text).width;
+        const textX = Math.min(Math.max(pca.center.x + 24, 10), currentImage.width - textWidth - 30);
+        const textY = Math.max(pca.center.y - 40, 40);
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(textX - 12, textY - 26, textWidth + 24, 52);
+        ctx.fillStyle = '#39ff14';
+        ctx.fillText(text, textX, textY);
+    }
+};
+
+// "Crop Boxes" debug view: the padded axis-aligned bounding box each tooth is actually cropped
+// to for ResNet's visual branch - poly.min/max + 10px padding, in ORIGINAL pixel space (not the
+// PCA-rotated frame computeToothMeta's geometry-branch bbox uses - this is a different bbox for
+// a different branch). Matches ResNet/tooth/train.py's ToothDataset crop convention exactly, so
+// what's drawn here is pixel-for-pixel what the visual branch actually sees.
+const CROP_PAD = 10;
+const drawCropBoxesOverlay = (predictions) => {
+    if (!predictions || predictions.length === 0 || !currentImage) return;
+
+    predictions.forEach(pred => {
+        const poly = pred.polygon;
+        if (!poly || poly.length === 0) return;
+
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        poly.forEach(([x, y]) => {
+            if (x < x1) x1 = x;
+            if (x > x2) x2 = x;
+            if (y < y1) y1 = y;
+            if (y > y2) y2 = y;
+        });
+        x1 = Math.max(0, x1 - CROP_PAD);
+        y1 = Math.max(0, y1 - CROP_PAD);
+        x2 = Math.min(currentImage.width, x2 + CROP_PAD);
+        y2 = Math.min(currentImage.height, y2 + CROP_PAD);
+
+        ctx.strokeStyle = '#39ff14';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    });
+};
+
 // Determines each detected tooth's FDI tens digit (quadrant) in the Holding state: uses the
 // server-refined `mirror` flag (derived from raw digit occurrence sequence before Hungarian
 // assignment) when available, falling back to PCA coordinate side (x_rot sign) if missing.
@@ -258,93 +337,63 @@ const computeMissingTeeth = (predictions, pca, isUpper, isLower, hasClassificati
     return fdiLabels.filter(n => !found.has(n));
 };
 
-// Draws the predicted Arch Complexity class as a badge anchored in the canvas's bottom-right
-// corner - a canvas-visible counterpart to the sidebar's #complexity-result text
-// (renderComplexityStatus). Styled like drawFdiNumberBadge (black box, neon-green text) since
-// it's a per-arch sibling of that per-tooth badge family. Returns the vertical space it took up
-// (box height + gap) so drawMissingIndicator can stack its own badges above it.
-const drawComplexityIndicator = (label) => {
-    if (!label) return 0;
+// Bottom panel: the blank strip redrawCanvas appends below the image's own height (see
+// js/main.js's canvas sizing), one line: "Complexity: Class II    Missing: #41, #31" - kept
+// below the image (not overlaid on it) so it never covers the exact gap/crowding region the
+// text is describing, and never competes with tooth badges for the same pixels.
+// Always draws the panel background (even with no complexity label or missing teeth) so the
+// bottom strip doesn't flicker in and out as those values load in.
+const drawBottomPanel = (complexityLabel, missingNumbers, imageWidth, imageHeight) => {
+    const panelY = imageHeight;
 
-    const padding = 24;
-    const boxHeight = 68;
-    const boxGap = 14;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(0, panelY, imageWidth, BOTTOM_PANEL_HEIGHT);
+
+    const segments = [];
+    if (complexityLabel) {
+        segments.push({ text: `Complexity: Class ${complexityLabel}`, color: '#39ff14' });
+    }
+    if (missingNumbers && missingNumbers.length > 0) {
+        const list = missingNumbers.map(n => `#${n}`).join(', ');
+        segments.push({ text: `Missing: ${list}`, color: '#ff3366' });
+    }
+    if (segments.length === 0) return;
+
     const font = 'bold 40px sans-serif';
-    const prefix = 'Complexity: ';
-    const value = `Class ${label}`;
-
+    const gap = 56;
     ctx.font = font;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
 
-    const prefixWidth = ctx.measureText(prefix).width;
-    const valueWidth = ctx.measureText(value).width;
-    const boxWidth = prefixWidth + valueWidth + 36;
-    const boxX = canvas.width - padding - boxWidth;
-    const boxY = canvas.height - padding - boxHeight;
+    const widths = segments.map(s => ctx.measureText(s.text).width);
+    const totalWidth = widths.reduce((a, b) => a + b, 0) + gap * (segments.length - 1);
+    const centerY = panelY + BOTTOM_PANEL_HEIGHT / 2;
+    let x = Math.max((imageWidth - totalWidth) / 2, 24);
 
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-        ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 10);
-    } else {
-        ctx.rect(boxX, boxY, boxWidth, boxHeight);
-    }
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-    ctx.fill();
-    ctx.strokeStyle = '#39ff14';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.font = font;
-    const textY = boxY + boxHeight / 2 + 1;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(prefix, boxX + 18, textY);
-    ctx.fillStyle = '#39ff14';
-    ctx.fillText(value, boxX + 18 + prefixWidth, textY);
-
-    return boxHeight + boxGap;
+    segments.forEach((s, i) => {
+        ctx.fillStyle = s.color;
+        ctx.fillText(s.text, x, centerY);
+        x += widths[i] + gap;
+    });
 };
 
-// Draws each missing tooth's FDI number as a "MISSING #NN" badge in the canvas's bottom-right
-// corner, stacked bottom-up starting above `bottomOffset` (the space drawComplexityIndicator
-// already claimed) - a canvas-visible counterpart to the sidebar's #missing-result text
-// (renderMissingStatus), for when the sidebar isn't in view. Background matches
-// drawFdiNumberBadge's black box, so it reads as the same badge family as the FDI labels.
-const drawMissingIndicator = (missingNumbers, bottomOffset = 0) => {
-    if (!missingNumbers || missingNumbers.length === 0) return;
+// Renders a non-CHAI model's own predictions directly - a plain box outline (these models give
+// axis-aligned boxes, not CHAI's segmentation polygons) plus the same FDI badge style used
+// everywhere else, so the two look like the same family of output despite the different pipeline
+// underneath. No color-coding by confidence/correctness - matches drawSegmentation's own
+// "the number badge identifies the tooth, not box color" convention.
+const drawExternalModelBoxes = (predictions) => {
+    if (!predictions || predictions.length === 0) return;
 
-    const padding = 24;
-    const boxHeight = 68;
-    const boxGap = 14;
-    const font = 'bold 44px sans-serif';
+    predictions.forEach(p => {
+        const [x1, y1, x2, y2] = p.box;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    ctx.font = font;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-
-    // Bottom-up, so the first missing number ends up lowest (closest to the corner/offset).
-    missingNumbers.forEach((n, i) => {
-        const text = `MISSING #${n}`;
-        const textWidth = ctx.measureText(text).width;
-        const boxWidth = textWidth + 36;
-        const boxX = canvas.width - padding - boxWidth;
-        const boxY = canvas.height - padding - bottomOffset - boxHeight - i * (boxHeight + boxGap);
-
-        ctx.beginPath();
-        if (typeof ctx.roundRect === 'function') {
-            ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 10);
-        } else {
-            ctx.rect(boxX, boxY, boxWidth, boxHeight);
-        }
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 51, 102, 0.25)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.font = font;
-        ctx.fillStyle = '#ff3366';
-        ctx.fillText(text, boxX + 18, boxY + boxHeight / 2 + 1);
+        const centerX = (x1 + x2) / 2;
+        const centerY = (y1 + y2) / 2;
+        drawFdiNumberBadge(centerX, centerY, String(p.fdi_number));
     });
 };
 
@@ -421,6 +470,31 @@ const redrawCanvas = () => {
     }
 
     const file = imageFiles[currentImageIndex];
+    const selectedModel = getSelectedModel();
+
+    // Ghorbani/Yoon are self-contained full-image models - no CHAI segmentation, no PCA/Held-Karp
+    // arch ordering, no Arch Complexity model of their own (that's CHAI-specific geometry, not
+    // part of either paper) - so this branch skips straight to their own /*_predict endpoint and
+    // renders just the FDI-number boxes it returns, no bottom panel (see js/main.js's
+    // resizeCanvasForCurrentModel, which only reserves BOTTOM_PANEL_HEIGHT for the 'chai' branch).
+    if (selectedModel !== 'chai') {
+        clearAnalysisResult();
+        clearComplexityStatus();
+        renderMissingStatus([]);
+        if (!file) return;
+
+        const cache = selectedModel === 'ghorbani' ? ghorbaniAnalysisCache : yoonAnalysisCache;
+        const cached = cache[file.name];
+        if (!cached) {
+            (selectedModel === 'ghorbani' ? runGhorbaniAnalysis : runYoonAnalysis)(file);
+            return;
+        }
+        if (cached.status === 'done') {
+            drawExternalModelBoxes(cached.predictions);
+        }
+        return;
+    }
+
     const predictions = file ? segmentationCache[file.name] : null;
 
     // Jaw (upper/lower) is determined geometrically from the arch's curvature the moment
@@ -451,20 +525,24 @@ const redrawCanvas = () => {
 
     if (vizMode === 'segmentation') {
         drawRawSegmentation(predictions);
+    } else if (vizMode === 'pca') {
+        drawPcaJawOverlay(predictions, pca, jawResult);
     } else if (vizMode === 'heldkarp') {
         drawHeldKarpOrder(predictions, pca, isUpper);
     } else if (vizMode === 'mirroring') {
         drawMirroringOverlay(predictions, pca);
+    } else if (vizMode === 'crop') {
+        drawCropBoxesOverlay(predictions);
     }
 
     const missingNumbers = computeMissingTeeth(predictions, pca, isUpper, isLower, hasClassification, file);
     renderMissingStatus(missingNumbers);
-    if (vizMode === 'off') {
-        const complexity = file ? complexityCache[file.name] : null;
-        const complexityLabel = complexity && complexity.status === 'done'
-            ? (COMPLEXITY_LABELS[complexity.classIdx] ?? null)
-            : null;
-        const offset = drawComplexityIndicator(complexityLabel);
-        drawMissingIndicator(missingNumbers, offset);
-    }
+
+    // Drawn unconditionally (not gated on vizMode === 'off') - the panel lives outside the
+    // image itself, so it doesn't compete with any of the debug overlays for the same pixels.
+    const complexity = file ? complexityCache[file.name] : null;
+    const complexityLabel = complexity && complexity.status === 'done'
+        ? (COMPLEXITY_LABELS[complexity.classIdx] ?? null)
+        : null;
+    drawBottomPanel(complexityLabel, missingNumbers, currentImage.width, currentImage.height);
 };

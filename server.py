@@ -1,4 +1,5 @@
 import io
+import sys
 import base64
 import importlib.util
 from pathlib import Path
@@ -112,6 +113,72 @@ try:
 except Exception as e:
     print(f"Error loading YOLO model: {e}")
     yolo_model = None
+
+# ---------------------------------------------------------------------------------------------
+# Comparison-paper reproductions (comparison/ghorbani, comparison/yoon) - loaded read-only for
+# the sidebar's MODELS radio (js/dom.js getSelectedModel), which lets the web UI show each
+# paper's own labeling on the current image instead of CHAI's. Neither has an Arch Complexity
+# model of its own (that's CHAI-specific geometry, not part of either paper), so their responses
+# are just FDI-number boxes - the frontend renders those alone, no complexity/missing panel (see
+# js/render.js redrawCanvas's non-CHAI branch).
+# ---------------------------------------------------------------------------------------------
+GHORBANI_DIR = ROOT / "comparison" / "ghorbani"
+YOON_DIR = ROOT / "comparison" / "yoon"
+
+ghorbani_module = None
+ghorbani_detect_model = None
+ghorbani_classify_model = None
+ghorbani_eval_transform = None
+try:
+    sys.path.insert(0, str(GHORBANI_DIR))
+    _ghorbani_spec = importlib.util.spec_from_file_location("ghorbani_evaluate", str(GHORBANI_DIR / "evaluate.py"))
+    ghorbani_module = importlib.util.module_from_spec(_ghorbani_spec)
+    _ghorbani_spec.loader.exec_module(ghorbani_module)
+
+    ghorbani_detect_model = YOLO(str(ghorbani_module.find_latest_detect_weights()))
+
+    classify_ckpt = GHORBANI_DIR / "model" / "classify_best.pth"
+    if classify_ckpt.exists():
+        ghorbani_classify_model = ghorbani_module.build_model(device)
+        ghorbani_classify_model.load_state_dict(torch.load(classify_ckpt, map_location=device))
+        ghorbani_classify_model.eval()
+        ghorbani_eval_transform = transforms.Compose([
+            transforms.Resize((ghorbani_module.IMG_SIZE, ghorbani_module.IMG_SIZE)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        print("Ghorbani reproduction models loaded.")
+    else:
+        print(f"Ghorbani classify checkpoint not found at {classify_ckpt}; /ghorbani_predict disabled.")
+except Exception as e:
+    print(f"Ghorbani reproduction models not available: {e}")
+
+yoon_model = None
+yoon_inference_detector = None
+try:
+    from mmdet.apis import init_detector as _yoon_init_detector, inference_detector as _yoon_inference_detector
+    sys.path.insert(0, str(YOON_DIR))
+    _yoon_spec = importlib.util.spec_from_file_location("yoon_evaluate", str(YOON_DIR / "evaluate.py"))
+    _yoon_evaluate_module = importlib.util.module_from_spec(_yoon_spec)
+    _yoon_spec.loader.exec_module(_yoon_evaluate_module)
+
+    yoon_checkpoint = _yoon_evaluate_module.find_checkpoint(None)
+    yoon_model = _yoon_init_detector(str(YOON_DIR / "config.py"), yoon_checkpoint, device=str(device))
+    yoon_inference_detector = _yoon_inference_detector
+    print(f"Yoon reproduction model loaded from {yoon_checkpoint}.")
+except (Exception, SystemExit) as e:
+    # find_checkpoint raises SystemExit (not Exception) when no checkpoint exists yet - training
+    # may still be in progress, so this endpoint just stays disabled rather than crashing startup.
+    print(f"Yoon reproduction model not available: {e}")
+    yoon_model = None
+
+# Both reproductions were trained on the same 24 full two-digit FDI numbers CHAI's own dataset
+# has GT for (11-16/21-26/31-36/41-46) - see comparison/ghorbani/train_classify.py and
+# comparison/yoon/prepare_coco_labels.py's docstrings for why (no primary teeth, no 7/8 wisdom
+# teeth in this dataset). Class index -> FDI number for Yoon's detector output; Ghorbani's own
+# FDI_CLASSES (identically ordered) comes from ghorbani_module directly.
+YOON_FDI_CLASSES = [q * 10 + d for q in (1, 2, 3, 4) for d in range(1, 7)]
+
 
 # Preprocessing transforms (must match ResNet/tooth/train.py validation transforms)
 val_transform = transforms.Compose([
@@ -316,6 +383,93 @@ def complexity_predict():
     except Exception as e:
         print(f"Error during complexity prediction: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/ghorbani_predict', methods=['POST'])
+def ghorbani_predict():
+    if ghorbani_detect_model is None or ghorbani_classify_model is None:
+        return jsonify({'success': False, 'error': 'Ghorbani reproduction model not available'}), 500
+    if 'image' not in request.files:
+        return jsonify({'success': False, 'error': 'No image file uploaded'}), 400
+
+    file = request.files['image']
+    try:
+        pil_image = Image.open(io.BytesIO(file.read())).convert('RGB')
+        # PIL gives RGB; the detector/crop_and_classify pair (comparison/ghorbani/evaluate.py)
+        # was written and validated against cv2.imread's BGR convention - convert once here
+        # rather than touching that already-working code.
+        image = np.array(pil_image)[:, :, ::-1].copy()
+
+        result = ghorbani_detect_model.predict(image, conf=ghorbani_module.CONF_THRESHOLD, verbose=False)[0]
+        det_boxes = result.boxes.xyxy.cpu().numpy().tolist() if len(result.boxes) else []
+        if not det_boxes:
+            return jsonify({'success': True, 'predictions': [], 'jaw': None})
+
+        det_probs = ghorbani_module.crop_and_classify(
+            image, det_boxes, ghorbani_classify_model, device, ghorbani_eval_transform
+        )
+
+        # A live single-image request has no folder-derived jaw label the way evaluate.py's
+        # offline test-set run does - infer it from a majority vote of the detections' own raw
+        # top-1 quadrant, same spirit as resolve_duplicates_for_image's own per-half fallback.
+        quadrant_of_class = np.array([c // 10 for c in ghorbani_module.FDI_CLASSES])
+        top1_quadrant = quadrant_of_class[det_probs.argmax(axis=1)]
+        upper_votes = int(np.isin(top1_quadrant, (1, 2)).sum())
+        lower_votes = int(np.isin(top1_quadrant, (3, 4)).sum())
+        jaw = 'upper' if upper_votes >= lower_votes else 'lower'
+
+        final_class = ghorbani_module.resolve_duplicates_for_image(det_boxes, det_probs, jaw)
+
+        predictions = []
+        for box, cls, probs_row in zip(det_boxes, final_class, det_probs):
+            cls = int(cls)
+            predictions.append({
+                'box': [float(v) for v in box],
+                'fdi_number': cls,
+                'confidence': float(probs_row[ghorbani_module.FDI_TO_IDX[cls]]),
+            })
+        return jsonify({'success': True, 'predictions': predictions, 'jaw': jaw})
+    except Exception as e:
+        print(f"Error during Ghorbani prediction: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/yoon_predict', methods=['POST'])
+def yoon_predict():
+    if yoon_model is None:
+        return jsonify({'success': False, 'error': 'Yoon reproduction model not available'}), 500
+    if 'image' not in request.files:
+        return jsonify({'success': False, 'error': 'No image file uploaded'}), 400
+
+    file = request.files['image']
+    try:
+        pil_image = Image.open(io.BytesIO(file.read())).convert('RGB')
+        # mmdet's own pipeline loads images BGR (mmcv's default, matching cv2/COCO convention) -
+        # same conversion as /ghorbani_predict, for the same reason.
+        image = np.array(pil_image)[:, :, ::-1].copy()
+
+        result = yoon_inference_detector(yoon_model, image)
+        pred = result.pred_instances
+        keep = (pred.scores >= 0.25).cpu().numpy()
+        det_boxes = pred.bboxes.cpu().numpy()[keep]
+        det_scores = pred.scores.cpu().numpy()[keep]
+        det_labels = pred.labels.cpu().numpy()[keep]
+
+        # No duplicate-resolution post-process - Yoon et al.'s paper describes no such mechanism
+        # for this model (unlike Ghorbani's Fig.1 half-jaw reassignment step), so its own top-1
+        # class per detection is the faithful reproduction, not an omission - see
+        # comparison/yoon/evaluate.py's module docstring for the full reasoning.
+        predictions = []
+        for box, score, label in zip(det_boxes, det_scores, det_labels):
+            predictions.append({
+                'box': [float(v) for v in box],
+                'fdi_number': int(YOON_FDI_CLASSES[int(label)]),
+                'confidence': float(score),
+            })
+        return jsonify({'success': True, 'predictions': predictions})
+    except Exception as e:
+        print(f"Error during Yoon prediction: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     # Start the server on port 5001

@@ -177,10 +177,14 @@ const computeToothMeta = (pred, pca) => {
     }
 
     return {
-        x1: x1_c / canvas.width,
-        y1: y1_c / canvas.height,
-        x2: x2_c / canvas.width,
-        y2: y2_c / canvas.height,
+        // Normalized against the source image's own dimensions (currentImage), not canvas.width/
+        // height - the canvas is padded taller than the image by BOTTOM_PANEL_HEIGHT to make room
+        // for drawBottomPanel's info strip (js/main.js), so canvas.height no longer equals the
+        // image height these features were trained against (functions/features/coords.py).
+        x1: x1_c / currentImage.width,
+        y1: y1_c / currentImage.height,
+        x2: x2_c / currentImage.width,
+        y2: y2_c / currentImage.height,
         theta,
         // Which quadrant side this tooth is on (same test as computeQuadrantTens) - sent to
         // server.py /tooth_predict so it can group teeth by quadrant for the duplicate-digit

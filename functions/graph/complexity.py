@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
+    accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support,
     confusion_matrix, ConfusionMatrixDisplay,
 )
 
@@ -132,6 +132,25 @@ def compute_metrics(y_true, y_pred, labels=None):
     }
 
 
+def compute_per_class_metrics(y_true, y_pred):
+    """Per-class Precision/Recall/F1/support (Class I/II/III individually, not macro-averaged) -
+    lets a results table show which complexity class is hardest, rather than only the single
+    macro-averaged number compute_metrics() gives - e.g. backs up the "오차 분석" section's raw
+    confusion counts (Class II<->III mixups) with actual per-class scores."""
+    precision, recall, f1, support = precision_recall_fscore_support(
+        y_true, y_pred, labels=list(range(len(DISPLAY_LABELS))), zero_division=0
+    )
+    return {
+        DISPLAY_LABELS[i]: {
+            "precision": float(precision[i]),
+            "recall": float(recall[i]),
+            "f1": float(f1[i]),
+            "support": int(support[i]),
+        }
+        for i in range(len(DISPLAY_LABELS))
+    }
+
+
 def plot_metric_bars(metrics, title, out_path):
     present = [(key, label) for key, label in METRIC_DISPLAY if key in metrics]
     labels = [label for _, label in present]
@@ -154,8 +173,8 @@ def plot_metric_bars(metrics, title, out_path):
 def plot_confusion(y_true, y_pred, title, out_path):
     cm = confusion_matrix(y_true, y_pred, labels=list(range(len(DISPLAY_LABELS))))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DISPLAY_LABELS)
-    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
-    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
+    fig, ax = plt.subplots(figsize=(6.8, 6), facecolor=SURFACE)
+    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True)
     ax.set_title(title, color=INK)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, facecolor=SURFACE)
@@ -415,10 +434,14 @@ def main():
             continue
 
         metrics = compute_metrics(result["y_true"], result["y_pred"])
+        per_class = compute_per_class_metrics(result["y_true"], result["y_pred"])
         per_jaw_metrics[jaw] = metrics
-        summary[jaw] = {**metrics, "n": result["n"]}
+        summary[jaw] = {**metrics, "n": result["n"], "per_class": per_class}
         print(f"{jaw}: n={result['n']}, f1={metrics['f1']:.4f}, accuracy={metrics['accuracy']:.4f}, "
               f"precision={metrics['precision']:.4f}, recall={metrics['recall']:.4f}")
+        for cls, m in per_class.items():
+            print(f"  {cls}: precision={m['precision']:.4f} recall={m['recall']:.4f} "
+                  f"f1={m['f1']:.4f} (n={m['support']})")
 
         plot_metric_bars(
             metrics,
@@ -436,10 +459,14 @@ def main():
 
     if all_true:
         pooled_metrics = compute_metrics(all_true, all_pred)
+        pooled_per_class = compute_per_class_metrics(all_true, all_pred)
         per_jaw_metrics["pooled"] = pooled_metrics
-        summary["pooled"] = {**pooled_metrics, "n": len(all_true)}
+        summary["pooled"] = {**pooled_metrics, "n": len(all_true), "per_class": pooled_per_class}
         print(f"\nPooled (both jaws): n={len(all_true)}, f1={pooled_metrics['f1']:.4f}, "
               f"accuracy={pooled_metrics['accuracy']:.4f}")
+        for cls, m in pooled_per_class.items():
+            print(f"  {cls}: precision={m['precision']:.4f} recall={m['recall']:.4f} "
+                  f"f1={m['f1']:.4f} (n={m['support']})")
 
         plot_metric_bars(
             pooled_metrics,

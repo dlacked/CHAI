@@ -3,3 +3,13 @@ __pycache__/
 *.pyc
 *.pt
 *.pth
+
+# Regenerable derived data for the paper-reproduction comparisons (comparison/ghorbani,
+# comparison/yoon) - re-run prepare_detect_labels.py / prepare_coco_labels.py to rebuild. Each
+# holds either an NTFS junction into the real ~60GB+ dataset/images tree (not a copy, but git
+# would still try to traverse it) or tens of thousands of small label files / a large generated
+# JSON (comparison/yoon/coco_dataset/train/annotations.json alone is ~84MB) - none of it belongs
+# in git, same as dataset/ itself never has.
+comparison/ghorbani/detect_dataset/
+comparison/yoon/coco_dataset/
+comparison/*/runs/

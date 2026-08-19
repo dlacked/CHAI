@@ -1,0 +1,6 @@
+path: C:/Users/chnyon/Desktop/lab/WORK/2026-1/CHAI/dataset
+train: train/images/lower
+val: val/images/lower
+test: test/images/lower
+nc: 1
+names: ['tooth']
