@@ -170,10 +170,15 @@ class ToothPositionClassifier(nn.Module):
         logits = self.classifier(combined)
         return torch.softmax(logits, dim=1)
 
-def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path, runs_dir, epochs, batch_size, lr, patience=10):
+def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path, runs_dir, epochs, batch_size, lr, patience=10, resume=False):
     # Ensure save directory and runs directory exist
     Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
     Path(runs_dir).mkdir(parents=True, exist_ok=True)
+
+    # Full resumable state (model + optimizer + epoch + history) saved every epoch, separate
+    # from model_save_path - that file has to stay a bare state_dict since build_dataset.py's
+    # load_resnet() loads it directly with model.load_state_dict(torch.load(...)).
+    checkpoint_path = Path(model_save_path).parent / f"{jaw}_checkpoint.pth"
     
     # 1. Image transforms
     # No RandomHorizontalFlip/RandomRotation: the [x1,y1,x2,y2,theta] meta vector is read
@@ -231,10 +236,26 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
     train_f1s, val_f1s = [], []
+    start_epoch = 0
+
+    if resume and checkpoint_path.exists():
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        start_epoch = ckpt["epoch"] + 1
+        best_acc = ckpt["best_acc"]
+        epochs_no_improve = ckpt["epochs_no_improve"]
+        train_losses, val_losses = ckpt["train_losses"], ckpt["val_losses"]
+        train_accs, val_accs = ckpt["train_accs"], ckpt["val_accs"]
+        train_f1s, val_f1s = ckpt["train_f1s"], ckpt["val_f1s"]
+        print(f"Resumed from {checkpoint_path}: starting at epoch {start_epoch + 1}, "
+              f"best Val Acc so far {best_acc:.4f}, {epochs_no_improve}/{patience} epochs without improvement.")
+    elif resume:
+        print(f"--resume passed but no checkpoint found at {checkpoint_path}; starting fresh.")
 
     # 4. Training loop
     print(f"\nStarting ResNet18 Tooth Classifier (6 classes) training for {jaw.upper()} jaw...")
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
         running_loss = 0.0
         running_corrects = 0
@@ -319,9 +340,21 @@ def train_model(jaw, dataset_dir, train_csv_path, val_csv_path, model_save_path,
         else:
             epochs_no_improve += 1
             print(f"  --> No improvement in Val Accuracy for {epochs_no_improve}/{patience} epochs.")
-            if epochs_no_improve >= patience:
-                print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Accuracy improvement for {patience} epochs).")
-                break
+
+        torch.save({
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "best_acc": best_acc,
+            "epochs_no_improve": epochs_no_improve,
+            "train_losses": train_losses, "val_losses": val_losses,
+            "train_accs": train_accs, "val_accs": val_accs,
+            "train_f1s": train_f1s, "val_f1s": val_f1s,
+        }, checkpoint_path)
+
+        if epochs_no_improve >= patience:
+            print(f"\nEarly stopping triggered at epoch {epoch+1} (no Val Accuracy improvement for {patience} epochs).")
+            break
 
     print(f"\nTraining completed. Best Validation Accuracy: {best_acc:.4f}")
 
@@ -404,6 +437,13 @@ def main():
                         help="Jaw model to train: lower or upper (default: lower)")
     parser.add_argument("--dataset_dir", type=str, default=str(dataset_dir),
                         help="Path to the dataset folder")
+    parser.add_argument("--csv_dir", type=str, default=str(csv_dir),
+                        help="Directory holding {jaw}_features_{train,val}.csv (default: ResNet/tooth/csv - "
+                             "pass ResNet/tooth/csv_tightcrop for the tight-crop-normalization ablation)")
+    parser.add_argument("--model_dir", type=str, default=str(model_dir),
+                        help="Directory to save {jaw}_best.pth into (default: ResNet/tooth/model)")
+    parser.add_argument("--runs_dir", type=str, default=str(runs_dir),
+                        help="Directory to save metric plots/confusion matrix into (default: ResNet/tooth/runs)")
     parser.add_argument("--epochs", type=int, default=1000,
                         help="Number of epochs to train (default: 1000)")
     parser.add_argument("--batch_size", type=int, default=128,
@@ -412,24 +452,32 @@ def main():
                         help="Learning rate (default: 1e-4)")
     parser.add_argument("--patience", type=int, default=10,
                         help="Early stopping patience in epochs (default: 10)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from {model_dir}/{jaw}_checkpoint.pth (model+optimizer+epoch/history "
+                             "state, saved every epoch) if it exists, instead of starting fresh")
 
     args = parser.parse_args()
-    
-    train_csv_path = csv_dir / f"{args.jaw}_features_train.csv"
-    val_csv_path = csv_dir / f"{args.jaw}_features_val.csv"
-    model_save_path = model_dir / f"{args.jaw}_best.pth"
-    
+
+    args_csv_dir = Path(args.csv_dir)
+    args_model_dir = Path(args.model_dir)
+    args_runs_dir = Path(args.runs_dir)
+
+    train_csv_path = args_csv_dir / f"{args.jaw}_features_train.csv"
+    val_csv_path = args_csv_dir / f"{args.jaw}_features_val.csv"
+    model_save_path = args_model_dir / f"{args.jaw}_best.pth"
+
     train_model(
         jaw=args.jaw,
         dataset_dir=args.dataset_dir,
         train_csv_path=train_csv_path,
         val_csv_path=val_csv_path,
         model_save_path=model_save_path,
-        runs_dir=runs_dir,
+        runs_dir=args_runs_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
-        patience=args.patience
+        patience=args.patience,
+        resume=args.resume
     )
 
 if __name__ == "__main__":

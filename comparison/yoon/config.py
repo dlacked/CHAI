@@ -9,11 +9,12 @@ exactly - strong evidence the paper trained this stock config with only a handfu
 which is what this file does too, rather than hand-rebuilding the architecture from scratch.
 
 Deviations from the paper, each forced by this machine rather than a methodology choice:
-  - batch_size: paper used 8 samples/GPU x 2 Tesla V100 (32GB each, 64GB total) = 16 total. This
-    machine has one 12GB GPU, so 8 (matching the paper's per-GPU count, the closest a single GPU
-    can get to the stated setup) is used here instead of 16 - not yet confirmed to fit in 12GB,
-    watch for OOM on first run and drop it if so (see train.py's docstring for why no linear LR
-    rescaling is applied on top of that).
+  - batch_size=2 (train_dataloader below): paper used 8 samples/GPU x 2 Tesla V100 (32GB each,
+    64GB total) = 16 total. This machine has one 12GB GPU; 8 (matching the paper's per-GPU count)
+    OOM'd, and 4 measured worse ETA than 2 despite fewer iterations/epoch (see train_dataloader's
+    own comment for the measurements), so 2 is what's actually used. optim_wrapper's lr is
+    linearly scaled down to match (0.0002 * 2/16 = 0.000025 - see train.py's docstring, which
+    used to incorrectly claim no scaling was applied).
   - num_workers=0 and mp_start_method='spawn': Windows has no fork() - see
     comparison/ghorbani/train_detect.py's docstring for the identical Windows/spawn reasoning.
   - LR milestones: the paper states "step-based policy with warm-up and decay phases" for 40

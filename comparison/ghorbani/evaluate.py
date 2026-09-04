@@ -360,7 +360,7 @@ def main():
               f"recall={m['recall']:.4f}  f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
 
     complexity_build = load_module(
-        "vit_complexity_build_eval_ghorbani", PROJECT_ROOT / "ViT" / "complexity" / "build_dataset.py"
+        "vit_complexity_build_eval_ghorbani", PROJECT_ROOT / "Transformer" / "complexity" / "build_dataset.py"
     )
     complexity_by_image = complexity_build.load_complexity_labels(DATASET_DIR, "test")
     arch_by_complexity = tooth_module.compute_arch_metrics_by_complexity(

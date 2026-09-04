@@ -46,7 +46,7 @@ TOOTH_MODEL_PATHS = {
 }
 
 # Load ToothPositionClassifier from ResNet/tooth/train.py itself (single source of truth,
-# same dynamic-import approach used for the ViT models below) instead of keeping a
+# same dynamic-import approach used for the Transformer models below) instead of keeping a
 # hand-copied second definition here that could silently drift out of sync with training.
 RESNET_TOOTH_TRAIN_PATH = ROOT / "ResNet" / "tooth" / "train.py"
 _resnet_tooth_train_spec = importlib.util.spec_from_file_location("resnet_tooth_train", str(RESNET_TOOTH_TRAIN_PATH))
@@ -73,33 +73,56 @@ for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
     else:
         print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
+# Pooled tooth model (one model for both jaws, no PCA rotation, no theta - see
+# functions/features/coords_baseline.py / ResNet/tooth/train_baseline.py) - what /tooth_predict
+# actually uses now. tooth_models above is left loaded (unused by that route) so reverting to the
+# separate-per-jaw models is a one-line change if this doesn't pan out.
+BASELINE_MODEL_PATH = ROOT / "ResNet" / "tooth" / "model_baseline" / "best.pth"
+RESNET_TOOTH_TRAIN_BASELINE_PATH = ROOT / "ResNet" / "tooth" / "train_baseline.py"
+_resnet_tooth_train_baseline_spec = importlib.util.spec_from_file_location(
+    "resnet_tooth_train_baseline", str(RESNET_TOOTH_TRAIN_BASELINE_PATH))
+_resnet_tooth_train_baseline_module = importlib.util.module_from_spec(_resnet_tooth_train_baseline_spec)
+_resnet_tooth_train_baseline_spec.loader.exec_module(_resnet_tooth_train_baseline_module)
+ToothPositionClassifierNoTheta = _resnet_tooth_train_baseline_module.ToothPositionClassifierNoTheta
+
+baseline_tooth_model = None
+if BASELINE_MODEL_PATH.exists():
+    print(f"Loading baseline tooth model from {BASELINE_MODEL_PATH}...")
+    baseline_tooth_model = ToothPositionClassifierNoTheta(num_classes=6, pretrained=False)
+    baseline_tooth_model.load_state_dict(torch.load(BASELINE_MODEL_PATH, map_location=device))
+    baseline_tooth_model.to(device)
+    baseline_tooth_model.eval()
+else:
+    print(f"Baseline tooth model weights not found: {BASELINE_MODEL_PATH}")
+
 # Load the arch-level Transformer that predicts an arch's overall complexity class (I/II/III)
 # from per-tooth geometry alone - no image or ResNet features involved (see
-# ViT/complexity/model.py). Same dynamic-import approach as the ArchToothTransformer above.
-COMPLEXITY_MODEL_PATH = ROOT / "ViT" / "complexity" / "model.py"
-COMPLEXITY_MODEL_DIR = ROOT / "ViT" / "complexity" / "model"
-COMPLEXITY_MAX_TEETH = 12  # matches ViT/complexity/build_dataset.py's MAX_TEETH_PER_ARCH
+# Transformer/complexity/model.py). Same dynamic-import approach as the ArchToothTransformer above.
+# ONE model as of 2026-08-31 (was per-jaw {lower,upper}_best.pth before - promoted to a single
+# pooled model, held-out test confirmed pooling doesn't hurt accuracy, see project notes) - jaw no
+# longer selects a different model, just gets validated as a sane value in /complexity_predict.
+COMPLEXITY_MODEL_PATH = ROOT / "Transformer" / "complexity" / "model.py"
+COMPLEXITY_MODEL_WEIGHTS = ROOT / "Transformer" / "complexity" / "model" / "best.pth"
+COMPLEXITY_MAX_TEETH = 12  # matches Transformer/complexity/build_dataset.py's MAX_TEETH_PER_ARCH
+COMPLEXITY_GEOM_DIM = 4  # no-theta as of 2026-08-31 - see Transformer/complexity/train.py
 
-complexity_models = {}
+complexity_model = None
 if COMPLEXITY_MODEL_PATH.exists():
     spec = importlib.util.spec_from_file_location("vit_complexity_model", str(COMPLEXITY_MODEL_PATH))
     _vit_complexity_model_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(_vit_complexity_model_module)
     ArchComplexityTransformer = _vit_complexity_model_module.ArchComplexityTransformer
 
-    for jaw_name in ("lower", "upper"):
-        weights_path = COMPLEXITY_MODEL_DIR / f"{jaw_name}_best.pth"
-        if weights_path.exists():
-            print(f"Loading complexity transformer for {jaw_name} from {weights_path}...")
-            complexity_model = ArchComplexityTransformer(num_classes=3)
-            complexity_model.load_state_dict(torch.load(weights_path, map_location=device))
-            complexity_model.to(device)
-            complexity_model.eval()
-            complexity_models[jaw_name] = complexity_model
-        else:
-            print(f"Complexity transformer weights not found for {jaw_name}: {weights_path}")
+    if COMPLEXITY_MODEL_WEIGHTS.exists():
+        print(f"Loading pooled complexity transformer from {COMPLEXITY_MODEL_WEIGHTS}...")
+        complexity_model = ArchComplexityTransformer(geom_dim=COMPLEXITY_GEOM_DIM, num_classes=3)
+        complexity_model.load_state_dict(torch.load(COMPLEXITY_MODEL_WEIGHTS, map_location=device))
+        complexity_model.to(device)
+        complexity_model.eval()
+    else:
+        print(f"Complexity transformer weights not found: {COMPLEXITY_MODEL_WEIGHTS}")
 else:
-    print(f"ViT/complexity/model.py not found at {COMPLEXITY_MODEL_PATH}; complexity classification disabled.")
+    print(f"Transformer/complexity/model.py not found at {COMPLEXITY_MODEL_PATH}; complexity classification disabled.")
 
 # Initialize YOLO segmentation model
 print("Initializing YOLO segmentation model...")
@@ -200,8 +223,8 @@ val_transform = transforms.Compose([
 
 
 # Shared with functions/graph/tooth.py's held-out evaluation (see that module's use of the same
-# function, and ResNet/tooth/postprocess.py's docstring for why this replaced the ViT arch
-# transformer).
+# function, and ResNet/tooth/postprocess.py's docstring for why this replaced the old
+# arch-refinement Transformer, now retired to backups/superseded_20260831/ViT_arch/).
 _postprocess_spec = importlib.util.spec_from_file_location(
     "resnet_tooth_postprocess", str(ROOT / "ResNet" / "tooth" / "postprocess.py")
 )
@@ -280,8 +303,10 @@ def tooth_predict():
     jaw = payload.get('jaw')
     teeth = payload.get('teeth')
 
-    if jaw not in tooth_models:
-        return jsonify({'success': False, 'error': f'Tooth model not available for jaw: {jaw}'}), 400
+    if baseline_tooth_model is None:
+        return jsonify({'success': False, 'error': 'Pooled tooth model not available'}), 400
+    if jaw not in ('upper', 'lower'):
+        return jsonify({'success': False, 'error': f'Invalid jaw: {jaw}'}), 400
     if not teeth or not isinstance(teeth, list):
         return jsonify({'success': False, 'error': 'No teeth provided for prediction'}), 400
 
@@ -300,19 +325,20 @@ def tooth_predict():
             image = Image.open(io.BytesIO(crop_bytes)).convert('RGB')
             input_images.append(val_transform(image))
 
+            # No theta - the pooled model's meta_fc is 4-dim (see coords_baseline.py /
+            # train_baseline.py's ToothPositionClassifierNoTheta).
             meta_vector = [
                 float(tooth.get('x1', 0.0)),
                 float(tooth.get('y1', 0.0)),
                 float(tooth.get('x2', 0.0)),
                 float(tooth.get('y2', 0.0)),
-                float(tooth.get('theta', 0.0))
             ]
             input_meta.append(torch.tensor(meta_vector, dtype=torch.float32))
 
         input_images = torch.stack(input_images).to(device)
         input_meta = torch.stack(input_meta).to(device)
 
-        model = tooth_models[jaw]
+        model = baseline_tooth_model
         with torch.no_grad():
             outputs = model(input_images, input_meta)
 
@@ -356,8 +382,10 @@ def complexity_predict():
     jaw = payload.get('jaw')
     teeth = payload.get('teeth')
 
-    if jaw not in complexity_models:
-        return jsonify({'success': False, 'error': f'Complexity model not available for jaw: {jaw}'}), 400
+    if complexity_model is None:
+        return jsonify({'success': False, 'error': 'Complexity model not available'}), 400
+    if jaw not in ('lower', 'upper'):
+        return jsonify({'success': False, 'error': f'Invalid jaw: {jaw}'}), 400
     if not teeth or not isinstance(teeth, list):
         return jsonify({'success': False, 'error': 'No teeth provided for prediction'}), 400
 
@@ -366,6 +394,8 @@ def complexity_predict():
         # runToothAnalysis), matching the order the model was trained on. Only the first
         # COMPLEXITY_MAX_TEETH get used - the model's positional embedding doesn't support
         # longer sequences.
+        # No theta - COMPLEXITY_GEOM_DIM=4, matching the no-theta model loaded above (js/api.js's
+        # payload already dropped the theta field to match).
         teeth = teeth[:COMPLEXITY_MAX_TEETH]
         geom = torch.tensor([
             [
@@ -373,15 +403,13 @@ def complexity_predict():
                 float(tooth.get('y1', 0.0)),
                 float(tooth.get('x2', 0.0)),
                 float(tooth.get('y2', 0.0)),
-                float(tooth.get('theta', 0.0)),
             ]
             for tooth in teeth
         ], dtype=torch.float32, device=device).unsqueeze(0)
         key_padding_mask = torch.zeros(1, geom.size(1), dtype=torch.bool, device=device)
 
-        model = complexity_models[jaw]
         with torch.no_grad():
-            logits = model(geom, key_padding_mask)
+            logits = complexity_model(geom, key_padding_mask)
             probs = torch.softmax(logits, dim=-1)[0]
             class_idx = int(torch.argmax(probs).item())
 
@@ -483,5 +511,10 @@ def yoon_predict():
 
 
 if __name__ == '__main__':
-    # Start the server on port 5001
-    app.run(host='0.0.0.0', port=5001, debug=False)
+    # Start the server on port 5001. use_reloader explicitly off (not just relying on
+    # debug=False's default) - Werkzeug's reloader was observed spawning a second process whose
+    # sys.executable resolved to the system Python install instead of this project's .venv,
+    # silently missing mmdet/mmengine there and leaving yoon_model None in the process actually
+    # serving requests (server.py's own load-time print looked successful because it ran in the
+    # OTHER process). All model loading above only needs to happen once.
+    app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)

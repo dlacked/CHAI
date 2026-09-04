@@ -1,10 +1,10 @@
 """
-Evaluates the ViT/complexity arch-level Arch Complexity model (Class I/II/III,
-predicted from per-tooth geometry alone - see ViT/complexity/model.py) on the held-out test
+Evaluates the Transformer/complexity arch-level Arch Complexity model (Class I/II/III,
+predicted from per-tooth geometry alone - see Transformer/complexity/model.py) on the held-out test
 split (dataset/test/, never touched by training or validation).
 
-Reuses ViT/complexity/{model,dataset}.py and the {jaw}_test.pt caches already built by
-ViT/complexity/build_dataset.py instead of reimplementing the data pipeline.
+Reuses Transformer/complexity/{model,dataset}.py and the {jaw}_test.pt caches already built by
+Transformer/complexity/build_dataset.py instead of reimplementing the data pipeline.
 
 Usage:
     .venv/Scripts/python.exe functions/graph/complexity.py
@@ -28,7 +28,7 @@ PROJECT_ROOT = GRAPH_DIR.parent.parent  # .../CHAI/CHAI
 RESULTS_DIR = GRAPH_DIR / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-COMPLEXITY_DIR = PROJECT_ROOT / "ViT" / "complexity"
+COMPLEXITY_DIR = PROJECT_ROOT / "Transformer" / "complexity"
 CACHE_DIR = COMPLEXITY_DIR / "cache"
 MODEL_DIR = COMPLEXITY_DIR / "model"
 
@@ -87,23 +87,20 @@ def annotate_bars(ax, bars, fontsize=9):
                     ha="center", va="bottom", fontsize=fontsize, color=INK)
 
 
-def evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset):
+def evaluate_jaw(jaw, model, ArchComplexityDataset):
+    """Evaluates the (single, pooled) Complexity model on one jaw's test cache - `model` is
+    loaded once in main() and reused for every jaw, since as of 2026-08-31 there's only one
+    model (no more {jaw}_best.pth per jaw - see Transformer/complexity/train.py's docstring for
+    why pooling was adopted)."""
     test_cache = CACHE_DIR / f"{jaw}_test.pt"
-    weights_path = MODEL_DIR / f"{jaw}_best.pth"
-    if not test_cache.exists() or not weights_path.exists():
-        print(f"Skipping {jaw}: missing cache ({test_cache}) or weights ({weights_path}). "
-              f"Run ViT/complexity/build_dataset.py and train.py first.")
+    if not test_cache.exists():
+        print(f"Skipping {jaw}: missing cache ({test_cache}). Run Transformer/complexity/build_dataset.py first.")
         return None
 
     dataset = ArchComplexityDataset(test_cache)
     if len(dataset) == 0:
         print(f"Skipping {jaw}: empty test cache.")
         return None
-
-    model = ArchComplexityTransformer(num_classes=len(DISPLAY_LABELS))
-    model.load_state_dict(torch.load(weights_path, map_location=device))
-    model.to(device)
-    model.eval()
 
     y_true, y_pred = [], []
     with torch.no_grad():
@@ -174,8 +171,14 @@ def plot_confusion(y_true, y_pred, title, out_path):
     cm = confusion_matrix(y_true, y_pred, labels=list(range(len(DISPLAY_LABELS))))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DISPLAY_LABELS)
     fig, ax = plt.subplots(figsize=(6.8, 6), facecolor=SURFACE)
-    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True)
-    ax.set_title(title, color=INK)
+    # text_kw bumps the per-cell count font size (default is quite small at this figsize) -
+    # the axis label/tick/title sizes are bumped to match so the cell numbers don't look
+    # oversized next to everything else.
+    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, text_kw={"fontsize": 20})
+    ax.set_title(title, color=INK, fontsize=14)
+    ax.set_xlabel(ax.get_xlabel(), fontsize=13)
+    ax.set_ylabel(ax.get_ylabel(), fontsize=13)
+    ax.tick_params(labelsize=12)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, facecolor=SURFACE)
     plt.close()
@@ -423,13 +426,25 @@ def main():
     ArchComplexityTransformer = model_module.ArchComplexityTransformer
     ArchComplexityDataset = dataset_module.ArchComplexityDataset
 
+    # ONE pooled model as of 2026-08-31 - load once, reuse for every jaw (see evaluate_jaw's
+    # docstring). geom_dim=4: no theta (train_theta.py, geom_dim=5, is the ablation baseline and
+    # isn't evaluated here).
+    weights_path = MODEL_DIR / "best.pth"
+    if not weights_path.exists():
+        print(f"Complexity model weights not found: {weights_path}. Run Transformer/complexity/train.py first.")
+        return
+    model = ArchComplexityTransformer(geom_dim=4, num_classes=len(DISPLAY_LABELS))
+    model.load_state_dict(torch.load(weights_path, map_location=device))
+    model.to(device)
+    model.eval()
+
     summary = {}
     per_jaw_metrics = {}
     all_true, all_pred = [], []
 
     for jaw in ("lower", "upper"):
-        print(f"\nEvaluating {jaw} Arch Complexity model on test split...")
-        result = evaluate_jaw(jaw, ArchComplexityTransformer, ArchComplexityDataset)
+        print(f"\nEvaluating pooled Arch Complexity model on {jaw} test split...")
+        result = evaluate_jaw(jaw, model, ArchComplexityDataset)
         if result is None:
             continue
 

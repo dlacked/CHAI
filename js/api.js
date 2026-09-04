@@ -130,8 +130,8 @@ const clearAnalysisResult = () => {
     if (listEl) listEl.innerHTML = '';
 };
 
-// Sends the arch's per-tooth geometry (no crop needed - ViT/complexity only takes
-// [x1,y1,x2,y2,theta] per tooth, see ViT/complexity/model.py) to the complexity classifier
+// Sends the arch's per-tooth geometry (no crop needed - Transformer/complexity only takes
+// [x1,y1,x2,y2] per tooth, no theta, see Transformer/complexity/model.py) to the complexity classifier
 // and caches the predicted class (0=I, 1=II, 2=III). Runs independently of
 // runToothAnalysis/tooth_predict so the Complexity Class line can show up even while the
 // per-tooth FDI rows are still loading.
@@ -150,7 +150,7 @@ const runComplexityAnalysis = (file, jaw, teeth) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             jaw,
-            teeth: teeth.map(t => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, theta: t.theta }))
+            teeth: teeth.map(t => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2 }))
         })
     })
         .then(response => response.json())
@@ -241,7 +241,11 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
 
     const vertices = predictions.map(pred => computeCentroid(pred.polygon));
     const order = computeArchOrder(vertices, pca, jaw === 'upper');
-    const metas = predictions.map(pred => computeToothMeta(pred, pca));
+    // Baseline model (no PCA rotation anywhere, no theta - see computeToothMetaPooled's
+    // docstring), not computeToothMeta - that one has no call sites left at all as of
+    // 2026-08-31 (js/render.js drawFdiNumbers switched to computeToothMetaComplexity when the
+    // Arch Complexity Transformer's own coordinate scheme moved off PCA too).
+    const metas = predictions.map(pred => computeToothMetaPooled(pred, jaw === 'upper'));
 
     const teeth = order.map(idx => ({
         crop: cropToothImage(currentImage, predictions[idx].box),
@@ -249,7 +253,6 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
         y1: metas[idx].y1,
         x2: metas[idx].x2,
         y2: metas[idx].y2,
-        theta: metas[idx].theta,
         mirror: metas[idx].mirror
     }));
 

@@ -3,10 +3,16 @@ Evaluates the tooth-number pipeline's final prediction (is the predicted FDI las
 true one?) on the held-out test split (dataset/test/, never touched by training or validation).
 
 Reuses the project's existing pipelines instead of reimplementing them:
-functions/features/main.py (GT feature CSV extraction), ViT/arch/build_dataset.py (ResNet
-crop/feature/probability extraction per arch), and ResNet/tooth/postprocess.py (the per-quadrant
-Hungarian duplicate-resolution post-process that replaced the ViT arch-transformer refinement
-step - see that module's docstring for why).
+functions/features/main.py (GT feature CSV extraction), backups/superseded_20260831/ViT_arch/
+build_dataset.py (ResNet crop/feature/probability extraction per arch - retired, see below),
+and ResNet/tooth/postprocess.py (the per-quadrant Hungarian duplicate-resolution post-process
+that replaced this old arch-refinement Transformer - see that module's docstring for why).
+
+NOTE (2026-08-31): this whole module is currently BROKEN if run directly - CSV_DIR/RESNET_MODEL_DIR/
+ARCH_MODEL_DIR below point at paths that were moved to backups/superseded_20260831/ during the
+Baseline/Comp1-3 cleanup. Its individual functions (compute_missing_vs_complete_metrics etc.) are
+still imported and reused directly by ad-hoc eval scripts against the new Baseline/Comp1/Comp2/Comp3
+models - don't "fix" the module-level paths without checking those call sites first.
 
 Leads with macro F1 rather than accuracy: with the last-digit classes this imbalanced (incisors
 vastly outnumber missing/rare positions), accuracy alone can look flat even as rare-class
@@ -18,11 +24,15 @@ Usage:
 import csv as csv_module
 import importlib.util
 import json
+import os
 from collections import OrderedDict
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
+from PIL import Image
+from torchvision import transforms
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -42,9 +52,13 @@ DATASET_DIR = PROJECT_ROOT.parent / "dataset"   # .../CHAI/dataset
 RESULTS_DIR = GRAPH_DIR / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-CSV_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "csv"
-RESNET_MODEL_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "model"
-ARCH_MODEL_DIR = PROJECT_ROOT / "ViT" / "arch" / "model"
+# Baseline (paper label, "CHAI (Ours)") as of 2026-08-31 - was variant A's ResNet/tooth/{csv,model}
+# (now backups/superseded_20260831/), fixed to point here so evaluate_tooth_number() actually
+# evaluates the model the paper reports, not a retired one. csv_baseline is ONE combined
+# (both-jaws, `jaw` column) file per split, not per-jaw files - see build_baseline_arch_sequences.
+CSV_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "csv_baseline"
+RESNET_MODEL_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "model_baseline"
+ARCH_MODEL_DIR = PROJECT_ROOT / "backups" / "superseded_20260831" / "ViT_arch" / "model"  # retired
 
 # Metrics in recommended-first order - every plot/print below shows whichever of these are
 # present, F1 leading, rather than defaulting to accuracy as the headline number.
@@ -188,16 +202,20 @@ def gate_by_tens(y_pred, y_tens_pred, y_fdi_number):
 
 
 def compute_tens_predictions(dataset_dir, jaw, split):
-    """Replicates production's actual (geometry-only) FDI tens-digit assignment - js/geometry.js
-    computeToothMeta/computeQuadrantTens: PCA over every detected tooth centroid in the arch,
-    then each tooth's own rotated-x sign decides its quadrant. The last digit is the only thing
-    the model predicts; the tens digit has always come from this geometric step, both in
-    production and, silently, in every eval chart in this module up to now - which used the
-    *ground-truth* tens digit instead, i.e. assumed this geometric step is always correct. It
-    isn't: a missing tooth skews the PCA-estimated midline, and the tooth most exposed to that
-    skew is exactly the one closest to it (a digit-"1" tooth) - see project notes for a live
-    example (a real 41 and 31 both reading as "31"). This function exists so that failure mode
-    is actually visible in these graphs instead of being invisibly assumed away.
+    """PCA-based FDI tens-digit (quadrant) guess - PCA over every detected tooth centroid in the
+    arch, then each tooth's own rotated-x sign decides its quadrant. SUPERSEDED as of 2026-08-31:
+    production now uses the width/2-based guess instead (see tens_norot.py's
+    compute_tens_predictions_norot, and js/geometry.js computeToothMetaPooled) - kept here only
+    as the ablation comparison point (evaluate_tooth_number no longer calls this).
+
+    The last digit is the only thing the model predicts; the tens digit has always come from a
+    geometric step like this one, both in production and, silently, in every eval chart in this
+    module before compute_tens_predictions existed - which used the *ground-truth* tens digit
+    instead, i.e. assumed the geometric step is always correct. It isn't: a missing tooth skews
+    the PCA-estimated midline, and the tooth most exposed to that skew is exactly the one closest
+    to it (a digit-"1" tooth) - see project notes for a live example (a real 41 and 31 both
+    reading as "31") - exactly the failure mode width/2 (immune to which teeth are present, by
+    construction) doesn't have.
 
     Returns {(image_name, fdi_number): predicted_tens}.
     """
@@ -256,9 +274,15 @@ def compute_tens_predictions(dataset_dir, jaw, split):
 # ---------------------------------------------------------------------------
 def load_fdi_numbers_per_arch(csv_path, max_teeth_per_arch=12):
     """Reproduces ToothDataset's row filter and build_split's per-image grouping/truncation
-    (ViT/arch/build_dataset.py) using the FDI number column that build_split's own return
+    (backups/superseded_20260831/ViT_arch/build_dataset.py) using the FDI number column that build_split's own return
     value drops, so the result lines up 1:1 with arch_build.build_split's `sequences` list -
-    lets per-tooth predictions be attributed back to a specific FDI number."""
+    lets per-tooth predictions be attributed back to a specific FDI number.
+
+    NOTE (2026-08-31): evaluate_tooth_number() no longer calls this - it builds fdi_number lists
+    itself, in the same pass as the ResNet forward pass, inside build_baseline_arch_sequences
+    (needed since csv_baseline is one combined-jaws CSV, not per-jaw files, so grouping needs a
+    jaw filter first anyway - doing both in one pass avoids filtering twice). Left here, unused,
+    in case anything still wants a standalone FDI-numbers-per-arch reader for a per-jaw CSV."""
     rows = []
     with open(csv_path, "r", encoding="utf-8") as f:
         for row in csv_module.DictReader(f):
@@ -278,6 +302,124 @@ def load_fdi_numbers_per_arch(csv_path, max_teeth_per_arch=12):
     return fdi_lists
 
 
+def build_baseline_arch_sequences(jaw, split, dataset_dir, csv_dir, model_dir, device, max_teeth_per_arch=12):
+    """Baseline counterpart to the old (variant-A) arch_build.build_split
+    (backups/superseded_20260831/ViT_arch/build_dataset.py): runs the Baseline ResNet model
+    (ToothPositionClassifierNoTheta, train_baseline.py - 4-dim meta, no theta, pooled both-jaws)
+    over one jaw's arches, grouped by image_name, and returns per-tooth softmax probabilities in
+    the same arch-sequence shape evaluate_tooth_number() expects.
+
+    csv_baseline is ONE combined (`jaw` column) CSV per split - filtered to this jaw here (same
+    trick as Transformer/complexity/build_dataset.py and ResNet/tooth/train_comp2.py use), and
+    since main_baseline.py writes one jaw's rows fully before starting the other, filtering still
+    leaves each image's rows contiguous and in Held-Karp arch order.
+
+    No `geom`/`img_vec` fields in the returned sequences (unlike the old build_split) - those fed
+    the old arch-refinement Transformer's own two extra input branches, which has no
+    Baseline-compatible equivalent, so evaluate_tooth_number()'s y_vit column falls back to
+    y_resnet for every arch (ARCH_MODEL_DIR / f"{jaw}_best.pth" simply won't exist under
+    Baseline's naming, so that fallback triggers automatically - see that function's arch_model
+    handling).
+
+    Returns (sequences, fdi_number_lists):
+      sequences: [{"image_name": str, "target": LongTensor[n], "prob_vec": FloatTensor[n, 6]}, ...]
+      fdi_number_lists: parallel list of this arch's true FDI numbers, same order as target.
+    """
+    train_baseline_module = load_module(
+        "train_baseline_eval", PROJECT_ROOT / "ResNet" / "tooth" / "train_baseline.py"
+    )
+    ToothPositionClassifierNoTheta = train_baseline_module.ToothPositionClassifierNoTheta
+
+    csv_path = Path(csv_dir) / f"features_{split}.csv"
+    rows = []
+    with open(csv_path, "r", encoding="utf-8") as f:
+        for row in csv_module.DictReader(f):
+            if row.get("jaw") != jaw:
+                continue
+            fdi_digit = row.get("fdi_last_digit")
+            if fdi_digit not in (None, "") and 1 <= int(fdi_digit) <= 6:
+                rows.append(row)
+
+    groups = OrderedDict()
+    for row in rows:
+        groups.setdefault(row["image_name"], []).append(row)
+
+    model = ToothPositionClassifierNoTheta(num_classes=6, pretrained=False)
+    model.load_state_dict(torch.load(Path(model_dir) / "best.pth", map_location=device))
+    model.to(device)
+    model.eval()
+
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+
+    sequences = []
+    fdi_number_lists = []
+    with torch.no_grad():
+        for image_name, group_rows in groups.items():
+            if len(group_rows) > max_teeth_per_arch:
+                group_rows = group_rows[:max_teeth_per_arch]
+
+            img_path = Path(dataset_dir) / split / "images" / jaw / image_name
+            image = cv2.imread(str(img_path))
+            if image is None:
+                image = np.zeros((224, 224, 3), dtype=np.uint8)
+            h, w = image.shape[:2]
+
+            image_name_no_ext = os.path.splitext(image_name)[0]
+            json_path = Path(dataset_dir) / split / "labels_json" / jaw / f"{image_name_no_ext}.json"
+            polys_by_fdi = {}
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for t in data.get("tooth", []):
+                    num = t.get("teeth_num")
+                    seg = t.get("segmentation", [])
+                    if num is None or not seg:
+                        continue
+                    poly = np.array(seg) if (isinstance(seg[0], list) and len(seg[0]) == 2) else np.array(seg).reshape(-1, 2)
+                    polys_by_fdi[num] = poly
+
+            imgs, metas, targets, fdi_numbers = [], [], [], []
+            for row in group_rows:
+                fdi_number = int(row["fdi_number"])
+                fdi_digit = int(row["fdi_last_digit"])
+
+                poly = polys_by_fdi.get(fdi_number)
+                if poly is not None:
+                    x_min, y_min = poly.min(axis=0)
+                    x_max, y_max = poly.max(axis=0)
+                    pad = 10
+                    x1 = int(max(0, x_min - pad)); y1 = int(max(0, y_min - pad))
+                    x2 = int(min(w, x_max + pad)); y2 = int(min(h, y_max + pad))
+                else:
+                    x1, y1, x2, y2 = 0, 0, w, h
+
+                cropped = image[y1:y2, x1:x2]
+                if cropped.size == 0:
+                    cropped = np.zeros((224, 224, 3), dtype=np.uint8)
+                cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+                imgs.append(transform(Image.fromarray(cropped_rgb)))
+                metas.append([float(row['x1']), float(row['y1']), float(row['x2']), float(row['y2'])])
+                targets.append(fdi_digit - 1)
+                fdi_numbers.append(fdi_number)
+
+            img_tensor = torch.stack(imgs).to(device)
+            meta_tensor = torch.tensor(metas, dtype=torch.float32).to(device)
+            prob_vec = model(img_tensor, meta_tensor).cpu()  # forward() already applies softmax
+
+            sequences.append({
+                "image_name": image_name,
+                "target": torch.tensor(targets, dtype=torch.long),
+                "prob_vec": prob_vec,
+            })
+            fdi_number_lists.append(fdi_numbers)
+
+    return sequences, fdi_number_lists
+
+
 def evaluate_tooth_number():
     """Runs every method being compared over the test set in one pass (one ResNet forward pass
     per jaw is the expensive part - everything downstream of `prob_vec` is cheap, so it's not
@@ -285,10 +427,11 @@ def evaluate_tooth_number():
 
       - y_resnet    : ResNet-only, independent per-tooth argmax (today's fallback whenever a
                       jaw has no arch weights).
-      - y_vit       : ResNet + the ViT arch-transformer refinement this pipeline used to run in
-                      production (see ViT/arch/model.py) - kept only for this comparison, not
-                      used anywhere else anymore (see ResNet/tooth/postprocess.py's docstring
-                      for why it was retired in favor of the Hungarian post-process below).
+      - y_vit       : ResNet + the old arch-refinement Transformer this pipeline used to run in
+                      production (see backups/superseded_20260831/ViT_arch/model.py) - kept only
+                      for this comparison, not used anywhere else anymore (see
+                      ResNet/tooth/postprocess.py's docstring for why it was retired in favor of
+                      the Hungarian post-process below).
       - y_postproc  : ResNet + arch-wide Hungarian digit resolution, tens read off afterward by
                       digit-pairing - today's actual production pipeline (server.py
                       /tooth_predict). Digits first, tens second (resolve_arch_duplicates then
@@ -303,39 +446,41 @@ def evaluate_tooth_number():
                       independent post-process family (local heuristic vs. Hungarian's globally
                       optimal assignment), also not used in production.
     """
-    features_main = load_module("features_main", PROJECT_ROOT / "functions" / "features" / "main.py")
-    arch_build = load_module("arch_build_dataset", PROJECT_ROOT / "ViT" / "arch" / "build_dataset.py")
     postprocess = load_module("resnet_tooth_postprocess", PROJECT_ROOT / "ResNet" / "tooth" / "postprocess.py")
-    ArchToothTransformer = load_module(
-        "vit_arch_model_eval", PROJECT_ROOT / "ViT" / "arch" / "model.py"
-    ).ArchToothTransformer
+    tens_norot_module = load_module("tens_norot_eval", GRAPH_DIR / "tens_norot.py")
 
     per_jaw = {}
     for jaw in ("lower", "upper"):
-        csv_path = CSV_DIR / f"{jaw}_features_test.csv"
+        csv_path = CSV_DIR / "features_test.csv"
         if not csv_path.exists():
-            print(f"\nExtracting GT features for {jaw}/test...")
-            features_main.process_jaw(jaw, "test", str(DATASET_DIR), csv_path)
+            print(f"Error: {csv_path} not found. Run functions/features/main_baseline.py first.")
+            continue
 
-        print(f"\nBuilding {jaw}/test arch sequences (ResNet forward pass)...")
-        sequences = arch_build.build_split(jaw, "test", str(DATASET_DIR), str(CSV_DIR), str(RESNET_MODEL_DIR), device)
-        fdi_number_lists = load_fdi_numbers_per_arch(csv_path)
+        print(f"\nBuilding {jaw}/test arch sequences (Baseline ResNet forward pass)...")
+        sequences, fdi_number_lists = build_baseline_arch_sequences(
+            jaw, "test", str(DATASET_DIR), str(CSV_DIR), str(RESNET_MODEL_DIR), device
+        )
         # Production's actual (geometry-only, occasionally wrong) tens-digit guess - used below
         # both to gate correctness (gate_by_tens) and, faithfully to production, as the grouping
         # key the quadrant-dedup post-processes (Hungarian etc.) actually see - not the GT tens,
-        # which would hand them cleaner groups than production ever gets.
-        tens_pred_map = compute_tens_predictions(str(DATASET_DIR), jaw, "test")
+        # which would hand them cleaner groups than production ever gets. As of 2026-08-31,
+        # production's geometric guess is width/2-based, not PCA-based (see tens_norot.py and
+        # js/geometry.js computeToothMetaPooled) - compute_tens_predictions (PCA) is now the old,
+        # superseded comparison point, kept for the ablation table.
+        tens_pred_map = tens_norot_module.compute_tens_predictions_norot(str(DATASET_DIR), jaw, "test")
 
-        arch_weights = ARCH_MODEL_DIR / f"{jaw}_best.pth"
+        # arch_model is ALWAYS None now (was: loaded from ARCH_MODEL_DIR if weights existed there).
+        # The old arch-refinement Transformer (backups/superseded_20260831/ViT_arch/model.py)
+        # takes a DIFFERENT geometry format as input (5-dim PCA-rotated [x1,y1,x2,y2,theta] +
+        # its own img_vec branch) than build_baseline_arch_sequences produces (4-dim raw
+        # [x1,y1,x2,y2], no img_vec) - feeding it Baseline's geometry would be silently wrong, not
+        # just "missing," so this comparison is disabled entirely rather than attempted with
+        # mismatched inputs. y_vit falls back to y_resnet for every arch (matching the existing
+        # eval_baseline_methods.py convention noted in project notes) until/unless a
+        # Baseline-compatible arch-refinement model exists to compare against.
         arch_model = None
-        if arch_weights.exists():
-            print(f"Loading ViT arch transformer for {jaw} (comparison only, not production)...")
-            arch_model = ArchToothTransformer(num_classes=6)
-            arch_model.load_state_dict(torch.load(arch_weights, map_location=device))
-            arch_model.to(device)
-            arch_model.eval()
-        else:
-            print(f"No ViT arch transformer for {jaw} - ResNet+ViT column will fall back to ResNet-only.")
+        print(f"Old arch-refinement Transformer disabled for {jaw} (incompatible input format, see comment above) - "
+              f"ResNet+ViT column falls back to ResNet-only.")
 
         y_true, y_fdi_number, y_image_name = [], [], []
         y_resnet, y_vit, y_postproc, y_monodp, y_greedy = [], [], [], [], []
@@ -434,8 +579,11 @@ def plot_tooth_number_confusion(per_jaw, pred_key, label, out_path_template, ten
         cm = confusion_matrix(data["y_true"], gated_pred, labels=list(range(7)))
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=DIGIT_DISPLAY_LABELS)
         fig, ax = plt.subplots(figsize=(7.8, 6), facecolor=SURFACE)
-        disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True)
-        ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({label})", color=INK)
+        disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, text_kw={"fontsize": 16})
+        ax.set_title(f"Tooth Number Confusion Matrix - {jaw.capitalize()} Jaw ({label})", color=INK, fontsize=13)
+        ax.set_xlabel(ax.get_xlabel(), fontsize=12)
+        ax.set_ylabel(ax.get_ylabel(), fontsize=12)
+        ax.tick_params(labelsize=11)
         plt.tight_layout()
         out_path = Path(str(out_path_template).format(jaw=jaw))
         plt.savefig(out_path, dpi=150, facecolor=SURFACE)
@@ -790,7 +938,7 @@ def compute_arch_metrics_by_complexity(per_jaw, complexity_by_image, pred_key="y
                                         prob_field="prob_resnet", tens_pred_key="y_tens_pred_hungarian"):
     """Same per-arch metrics as compute_missing_vs_complete_metrics, bucketed by each arch's
     ground-truth Arch Complexity class (1/2/3, from AIHub's metadata.json - see
-    ViT/complexity/build_dataset.py's load_complexity_labels) instead of missing-tooth status -
+    Transformer/complexity/build_dataset.py's load_complexity_labels) instead of missing-tooth status -
     answers "does whole-arch exact-match performance hold up as malocclusion severity increases"
     rather than "...as teeth go missing." Returns {complexity_class: metrics}, keyed 1/2/3 so it
     slots into plot_grouped_model_comparison the same way compute_missing_vs_complete_metrics's
@@ -974,24 +1122,34 @@ def plot_tooth_number_confusion_by_fdi(per_jaw, title, out_path, pred_key="y_pos
 
     cm = confusion_matrix(all_true_fdi, all_pred_fdi, labels=fdi_labels)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[str(n) for n in fdi_labels])
-    fig, ax = plt.subplots(figsize=(13.8, 13), facecolor=SURFACE)
-    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, xticks_rotation=90, values_format="d")
-    ax.set_title(title, color=INK)
+    # 24x24 is a lot of cells for a 13.8x13in figure (~0.55in/cell) - sklearn's own auto-sized
+    # annotation font shrinks further as class count grows, so it's bumped explicitly here
+    # (9pt keeps 2-3 digit counts from colliding at this cell size; ticks/title follow suit).
+    fig, ax = plt.subplots(figsize=(17, 16), facecolor=SURFACE)
+    disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, xticks_rotation=90, values_format="d",
+              text_kw={"fontsize": 11})
+    ax.set_title(title, color=INK, fontsize=16)
+    ax.set_xlabel(ax.get_xlabel(), fontsize=14)
+    ax.set_ylabel(ax.get_ylabel(), fontsize=14)
+    ax.tick_params(labelsize=11)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, facecolor=SURFACE)
     plt.close()
 
     cm_pct = confusion_matrix(all_true_fdi, all_pred_fdi, labels=fdi_labels, normalize="true") * 100
     disp_pct = ConfusionMatrixDisplay(confusion_matrix=cm_pct, display_labels=[str(n) for n in fdi_labels])
-    fig, ax = plt.subplots(figsize=(13.8, 13), facecolor=SURFACE)
+    fig, ax = plt.subplots(figsize=(17, 16), facecolor=SURFACE)
     # A linear 0-100 color scale makes the small off-diagonal error percentages (often <1%)
     # indistinguishable from 0 next to the ~100% diagonal. PowerNorm(gamma<1) compresses the
     # high end and stretches the low end instead, so a cell at 0.1-0.2% still gets visible color
     # rather than reading as pure white - gamma=0.35 chosen empirically to keep small-but-real
     # error rates visible without also making 0% cells look colored.
     disp_pct.plot(cmap=plt.cm.Blues, ax=ax, colorbar=True, xticks_rotation=90, values_format=".1f",
-                   im_kw={"norm": PowerNorm(gamma=0.35, vmin=0, vmax=100)})
-    ax.set_title(f"{title} (%)", color=INK)
+                   im_kw={"norm": PowerNorm(gamma=0.35, vmin=0, vmax=100)}, text_kw={"fontsize": 11})
+    ax.set_title(f"{title} (%)", color=INK, fontsize=16)
+    ax.set_xlabel(ax.get_xlabel(), fontsize=14)
+    ax.set_ylabel(ax.get_ylabel(), fontsize=14)
+    ax.tick_params(labelsize=11)
     plt.tight_layout()
     pct_path = out_path.with_name(f"{out_path.stem}_pct{out_path.suffix}")
     plt.savefig(pct_path, dpi=150, facecolor=SURFACE)
@@ -1155,7 +1313,7 @@ def main():
     print("ResNet+Hungarian arch-level metrics by Arch Complexity class")
     print("=" * 70)
     complexity_build = load_module(
-        "vit_complexity_build_eval_2", PROJECT_ROOT / "ViT" / "complexity" / "build_dataset.py"
+        "vit_complexity_build_eval_2", PROJECT_ROOT / "Transformer" / "complexity" / "build_dataset.py"
     )
     complexity_by_image = complexity_build.load_complexity_labels(DATASET_DIR, "test")
     arch_by_complexity = compute_arch_metrics_by_complexity(per_jaw, complexity_by_image)

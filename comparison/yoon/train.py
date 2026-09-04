@@ -3,11 +3,11 @@ Trains the Yoon et al. reproduction (Cascade R-CNN, ResNet-101+FPN, via mmdetect
 CHAI's own COCO-format dataset - see config.py for the full hyperparameter mapping from the
 paper's stated setup, and prepare_coco_labels.py for the data conversion this depends on.
 
-No linear-scaling-rule LR adjustment was applied for the smaller batch_size (2, vs. the paper's
-16 total) despite that being common practice when shrinking batch size - the paper's own lr
-(0.0002) is already unusually low for a Cascade R-CNN (stock configs typically use 0.02 at
-batch 16), low enough that a further linear-scaled-down value risked stalling training
-entirely. Kept as stated in the paper; worth revisiting from the loss curve once a run exists.
+Linear-scaling-rule LR adjustment WAS applied for the smaller batch_size (2, vs. the paper's 16
+total, itself forced by this machine's single 12GB GPU vs. the paper's 2x Tesla V100 32GB) - see
+config.py's optim_wrapper: lr=0.000025 (paper's 0.0002 * 2/16), not the paper's own 0.0002 as an
+earlier draft of this docstring (and this comment) used to claim. This file has no lr override of
+its own - it just loads config.py as-is, so config.py's value is the actual one used to train.
 
 Usage:
     .venv/Scripts/python.exe comparison/yoon/prepare_coco_labels.py   # once, before this

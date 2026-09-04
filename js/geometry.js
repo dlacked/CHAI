@@ -94,20 +94,25 @@ const rotateToPcaFrame = (x, y, pca) => {
 };
 
 // Determines jaw (upper/lower) purely from the dental arch's curvature: fits a parabola
-// ry = a*rx^2 + b*rx + c to the tooth centroids in the PCA-rotated frame and checks the sign
-// of the leading coefficient. Validated against this project's full GT set (71,522 train+val
-// arches): lower-jaw arches always fit with a < 0, upper-jaw arches always fit with a > 0,
-// with a clean margin between the two ranges (lower tops out at -0.00088, upper starts at
-// +0.00098) - so this fully replaces the ResNet/jaw CNN classifier and its /classify round
-// trip. Needs >= 4 centroids for a non-degenerate quadratic fit.
+// y = a*x^2 + b*x + c directly to the tooth centroids' RAW (un-rotated) image coordinates and
+// checks the sign of the leading coefficient. Deliberately does NOT rotate into the PCA frame
+// first (unlike this function's original version) - leave-one-out testing (removing each
+// posterior molar in turn, the highest-leverage points for PCA's axis estimate) showed 0%
+// misclassification for both the PCA-rotated and raw-coordinate fits, identically, across 3,000
+// sampled arches per jaw - so the rotation step was earning nothing here. Also validated against
+// this project's full GT set (71,522 train+val arches): lower-jaw arches always fit with
+// a < 0, upper-jaw arches always fit with a > 0, with a clean margin between the two ranges
+// (lower tops out at -0.00088, upper starts at +0.00098) - so this fully replaces the
+// ResNet/jaw CNN classifier and its /classify round trip. Needs >= 4 centroids for a
+// non-degenerate quadratic fit. `pca` param kept (unused) for call-site compatibility.
 const classifyJawByCurvature = (predictions, pca) => {
-    if (!predictions || !pca) return null;
+    if (!predictions) return null;
     const centroids = predictions
         .filter(pred => pred.polygon && pred.polygon.length > 0)
         .map(pred => computeCentroid(pred.polygon));
     if (centroids.length < 4) return null;
 
-    const pts = centroids.map(c => rotateToPcaFrame(c.x, c.y, pca));
+    const pts = centroids.map(c => ({ tx: c.x, ty: c.y }));
 
     // Least-squares fit via the 3x3 normal-equations system for ry = a*rx^2 + b*rx + c.
     let s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
@@ -132,11 +137,14 @@ const classifyJawByCurvature = (predictions, pca) => {
     return { isUpper: a > 0, a };
 };
 
-// The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the PCA
-// centerline a tooth sits on - unlike slot-based lookup, this works even when the tooth count
-// doesn't reconstruct to 12, so it's used for the Holding-state FDI badges (ResNet fallback)
-const computeQuadrantTens = (rotatedX, isUpper) => {
-    const isLeftSide = rotatedX < 0;
+// The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the image's
+// own horizontal center (width/2) a tooth sits on - unlike slot-based lookup, this works even
+// when the tooth count doesn't reconstruct to 12, so it's used for the Holding-state FDI badges
+// (ResNet fallback). offsetFromCenter is the tooth's raw x minus width/2 (see computeHoldingTens
+// in js/render.js) - was PCA-rotated x before 2026-08-31, switched to width/2 for consistency
+// with computeToothMetaPooled (see that function's docstring for the accuracy trade-off).
+const computeQuadrantTens = (offsetFromCenter, isUpper) => {
+    const isLeftSide = offsetFromCenter < 0;
     if (isUpper) return isLeftSide ? 1 : 2;
     return isLeftSide ? 4 : 3;
 };
@@ -190,6 +198,100 @@ const computeToothMeta = (pred, pca) => {
         // server.py /tooth_predict so it can group teeth by quadrant for the duplicate-digit
         // post-processing, without needing to know the (yet-to-be-predicted) FDI number itself.
         mirror
+    };
+};
+
+// Baseline-model counterpart to computeToothMeta: computes the [x1, y1, x2, y2] independent
+// variables the Baseline ResNet Tooth model was trained on (see
+// functions/features/coords_baseline.py + ResNet/tooth/train_baseline.py) - used ONLY by the
+// tooth-number prediction path (js/api.js runToothAnalysis -> /tooth_predict). computeToothMeta
+// itself is left untouched because js/render.js's Arch Complexity call (drawFdiNumbers) still
+// needs its old PCA-rotated output (the Transformer/complexity model's own training data still
+// uses that per-jaw PCA-rotated coordinate scheme - see that model's docstring - it just dropped
+// the theta column, not the rotation).
+//
+// Two things differ from computeToothMeta: no PCA rotation at all (the bbox is taken directly
+// from the raw polygon, and the mirror/flip axes are the image's own geometry - width/2, height -
+// instead of a per-arch PCA axis), both found to be more robust to missing teeth than rotating
+// the whole frame (see project notes). `mirror` (which side of the image's own horizontal center
+// a tooth sits on) also switched to width/2 as of 2026-08-31 (was PCA-rotated centroid sign
+// before - PCA was found to be ~0.03-0.04pp more accurate on a held-out missing-teeth test, but
+// width/2 was chosen anyway so nothing in this pipeline depends on the PCA axis at all - see
+// functions/graph/tens_norot.py for the Python-side equivalent used in evaluation). No `pca`
+// param needed any more as a result.
+const computeToothMetaPooled = (pred, isUpper) => {
+    const centroid = computeCentroid(pred.polygon);
+    const mirror = centroid.x >= currentImage.width / 2;
+
+    let x1_c = Infinity, x2_c = -Infinity, y1_c = Infinity, y2_c = -Infinity;
+    pred.polygon.forEach(pt => {
+        if (pt[0] < x1_c) x1_c = pt[0];
+        if (pt[0] > x2_c) x2_c = pt[0];
+        if (pt[1] < y1_c) y1_c = pt[1];
+        if (pt[1] > y2_c) y2_c = pt[1];
+    });
+
+    const width = currentImage.width;
+    const height = currentImage.height;
+
+    if (mirror) {
+        const x1_new = width - x2_c;
+        const x2_new = width - x1_c;
+        x1_c = x1_new;
+        x2_c = x2_new;
+    }
+
+    if (!isUpper) {
+        const y1_new = height - y2_c;
+        const y2_new = height - y1_c;
+        y1_c = y1_new;
+        y2_c = y2_new;
+    }
+
+    return {
+        x1: x1_c / width,
+        y1: y1_c / height,
+        x2: x2_c / width,
+        y2: y2_c / height,
+        mirror
+    };
+};
+
+// Arch Complexity Transformer's coordinate scheme (see functions/features/coords_comp3.py's
+// get_normalized_coords_comp3, which Transformer/complexity/build_dataset.py's cache is built
+// from as of 2026-08-31): no PCA rotation, no X-mirror (unlike computeToothMetaPooled - the
+// Complexity task needs the true whole-arch left-right shape, which X-mirror would fold away),
+// Y-flip kept for the whole lower jaw (jaw-frame alignment, matching coords_baseline.py's Y flip
+// - needed so Transformer/complexity/train_pooled.py's pooled model sees one consistent
+// convention). Replaces the old computeToothMeta(pred, pca) call this model used before the
+// coordinate-scheme swap. computeToothMeta itself now has NO remaining call sites anywhere (the
+// "Coords Mirroring" debug overlay, js/render.js drawMirroringOverlay, only ever duplicated its
+// PCA mirror-decision logic inline, never actually called it) - left in place rather than
+// deleted, same rollback-safety rationale as server.py's unused per-jaw tooth_models dict.
+const computeToothMetaComplexity = (pred, isUpper) => {
+    let x1_c = Infinity, x2_c = -Infinity, y1_c = Infinity, y2_c = -Infinity;
+    pred.polygon.forEach(pt => {
+        if (pt[0] < x1_c) x1_c = pt[0];
+        if (pt[0] > x2_c) x2_c = pt[0];
+        if (pt[1] < y1_c) y1_c = pt[1];
+        if (pt[1] > y2_c) y2_c = pt[1];
+    });
+
+    const width = currentImage.width;
+    const height = currentImage.height;
+
+    if (!isUpper) {
+        const y1_new = height - y2_c;
+        const y2_new = height - y1_c;
+        y1_c = y1_new;
+        y2_c = y2_new;
+    }
+
+    return {
+        x1: x1_c / width,
+        y1: y1_c / height,
+        x2: x2_c / width,
+        y2: y2_c / height,
     };
 };
 

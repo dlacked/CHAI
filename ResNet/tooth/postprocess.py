@@ -6,7 +6,8 @@ from scipy.optimize import linear_sum_assignment
 # impossible - a quadrant has at most one of each). All three take the same (probs, group_keys)
 # shape and only differ in how they resolve that conflict once found - see each docstring for
 # the trade-off. A held-out test comparison (see resolve_quadrant_duplicates) is what replaced
-# the ResNet+ViT arch-transformer refinement step with resolve_quadrant_duplicates in production.
+# the old arch-refinement Transformer step (now retired to backups/superseded_20260831/ViT_arch/)
+# with resolve_quadrant_duplicates in production.
 
 
 def correct_mirrors_by_digit_occurrence(raw_pred, mirrors):

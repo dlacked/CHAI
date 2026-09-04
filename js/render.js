@@ -156,8 +156,10 @@ const drawMirroringOverlay = (predictions, pca) => {
         ctx.lineWidth = 3;
         ctx.stroke();
 
-        // Centroid marker - the exact point rotateToPcaFrame/computeQuadrantTens read tx from,
-        // so the mirror decision above is visibly anchored to something on the canvas.
+        // Centroid marker - the exact point rotateToPcaFrame reads tx from for this overlay's
+        // computeToothMeta-mirror decision above, so it's visibly anchored to something on the
+        // canvas. (computeQuadrantTens, used elsewhere for the tooth-numbering Holding-state
+        // badges, switched to a width/2 split as of 2026-08-31 and no longer reads PCA tx at all.)
         ctx.beginPath();
         ctx.arc(centroid.x, centroid.y, 7, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
@@ -182,13 +184,16 @@ const drawMirroringOverlay = (predictions, pca) => {
     ctx.setLineDash([]);
 };
 
-// "PCA & Jaw" debug view: the two earliest pipeline stages, drawn together since jaw
-// classification (classifyJawByCurvature) is computed directly from the PCA frame this draws -
-// each tooth's centroid (yellow dot, the input classifyJawByCurvature/PCA both reduce every
-// tooth to), the PCA principal axis itself (blue line through pca.center at pca.angle - the
-// arch's estimated main direction, distinct from drawMirroringOverlay's perpendicular midline),
-// and the resulting Upper/Lower label with the parabola's leading coefficient `a` (whose sign is
-// the entire classification rule - see classifyJawByCurvature's docstring).
+// "PCA & Jaw" debug view: the two earliest pipeline stages, drawn together for context even
+// though jaw classification (classifyJawByCurvature) no longer actually uses the PCA frame it's
+// drawn alongside - it fits its parabola directly on each tooth centroid's raw image coordinates
+// (see that function's docstring for why the PCA rotation step was dropped). Shown here: each
+// tooth's centroid (yellow dot, still the shared input both PCA and jaw classification reduce
+// every tooth to), the PCA principal axis itself (blue line through pca.center at pca.angle - the
+// arch's estimated main direction, distinct from drawMirroringOverlay's perpendicular midline,
+// and still used for Held-Karp ordering / the quadrant sign check elsewhere), and the resulting
+// Upper/Lower label with the parabola's leading coefficient `a` (whose sign is the entire
+// classification rule - see classifyJawByCurvature's docstring).
 const drawPcaJawOverlay = (predictions, pca, jawResult) => {
     if (!predictions || predictions.length === 0 || !pca || !currentImage) return;
 
@@ -270,8 +275,11 @@ const drawCropBoxesOverlay = (predictions) => {
 
 // Determines each detected tooth's FDI tens digit (quadrant) in the Holding state: uses the
 // server-refined `mirror` flag (derived from raw digit occurrence sequence before Hungarian
-// assignment) when available, falling back to PCA coordinate side (x_rot sign) if missing.
-const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
+// assignment) when available, falling back to the image-center (width/2) geometric guess if
+// missing - same width/2 split /tooth_predict itself uses (see computeToothMetaPooled), not PCA,
+// so the Holding-state preview never disagrees with the real server response for a different
+// reason than "the server saw more/different information."
+const computeHoldingTens = (order, cached, predictions, isUpper) => {
     const tensByVertexIdx = new Array(predictions.length).fill(null);
     order.forEach((vertexIdx, i) => {
         // cached.rows is already in arch order (js/api.js runToothAnalysis: "rows[i]
@@ -284,8 +292,7 @@ const computeHoldingTens = (order, cached, predictions, pca, isUpper) => {
             tensByVertexIdx[vertexIdx] = isUpper ? (row.mirror ? 2 : 1) : (row.mirror ? 3 : 4);
         } else {
             const centroid = computeCentroid(predictions[vertexIdx].polygon);
-            const { tx } = rotateToPcaFrame(centroid.x, centroid.y, pca);
-            tensByVertexIdx[vertexIdx] = computeQuadrantTens(tx, isUpper);
+            tensByVertexIdx[vertexIdx] = computeQuadrantTens(centroid.x - currentImage.width / 2, isUpper);
         }
     });
 
@@ -306,7 +313,7 @@ const computeFdiByIndexCore = (predictions, pca, isUpper, hasClassification, fil
 
     const cached = file ? toothAnalysisCache[file.name] : null;
     if (cached && cached.status === 'done') {
-        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, pca, isUpper);
+        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, isUpper);
         const result = new Array(predictions.length).fill(null);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
@@ -382,12 +389,20 @@ const drawBottomPanel = (complexityLabel, missingNumbers, imageWidth, imageHeigh
 // everywhere else, so the two look like the same family of output despite the different pipeline
 // underneath. No color-coding by confidence/correctness - matches drawSegmentation's own
 // "the number badge identifies the tooth, not box color" convention.
-const drawExternalModelBoxes = (predictions) => {
+// Per-model box color so Ghorbani/Yoon are visually distinguishable at a glance instead of both
+// rendering identically - keyed by getSelectedModel()'s own values ('ghorbani'/'yoon').
+const EXTERNAL_MODEL_BOX_COLORS = {
+    ghorbani: 'rgba(255, 23, 23, 0.95)',   // red
+    yoon: 'rgba(33, 150, 243, 0.95)',      // blue
+};
+
+const drawExternalModelBoxes = (predictions, modelKey) => {
     if (!predictions || predictions.length === 0) return;
 
+    const strokeStyle = EXTERNAL_MODEL_BOX_COLORS[modelKey] || 'rgba(255, 255, 255, 0.95)';
     predictions.forEach(p => {
         const [x1, y1, x2, y2] = p.box;
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeStyle = strokeStyle;
         ctx.lineWidth = 3;
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
@@ -397,9 +412,9 @@ const drawExternalModelBoxes = (predictions) => {
     });
 };
 
-// Labels teeth in arch order regardless of tooth count, and kicks off the per-tooth (ResNet+ViT)
-// and per-arch (Arch Complexity) analysis calls. Only ever invoked when the pipeline is
-// On - see redrawCanvas.
+// Labels teeth in arch order regardless of tooth count, and kicks off the per-tooth
+// (ResNet+Hungarian) and per-arch (Arch Complexity) analysis calls. Only ever invoked when the
+// pipeline is On - see redrawCanvas.
 const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     if (!predictions || !pca || !hasClassification) {
         clearAnalysisResult();
@@ -415,13 +430,12 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     // per-tooth geometry - so it's kicked off unconditionally here rather than only
     // alongside the tooth analysis call below (see runComplexityAnalysis / js/api.js).
     if (file) {
-        const metas = predictions.map(pred => computeToothMeta(pred, pca));
+        const metas = predictions.map(pred => computeToothMetaComplexity(pred, isUpper));
         const complexityTeeth = order.map(idx => ({
             x1: metas[idx].x1,
             y1: metas[idx].y1,
             x2: metas[idx].x2,
             y2: metas[idx].y2,
-            theta: metas[idx].theta
         }));
         runComplexityAnalysis(file, jaw, complexityTeeth);
     }
@@ -438,7 +452,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     // 'off' wants badges drawn here - it's the only mode that shows the normal labeled content.
     const vizModeNow = getVizMode();
     if (cached && cached.status === 'done' && vizModeNow === 'off') {
-        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, pca, isUpper);
+        const tensByVertexIdx = computeHoldingTens(order, cached, predictions, isUpper);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
             const row = cached.rows[archSeq];
@@ -525,7 +539,7 @@ const redrawCanvas = () => {
             return;
         }
         if (cached.status === 'done') {
-            drawExternalModelBoxes(cached.predictions);
+            drawExternalModelBoxes(cached.predictions, selectedModel);
         }
         return;
     }
