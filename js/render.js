@@ -4,9 +4,18 @@
 // badges or (more importantly) the exact gap/crowding region that text is describing.
 const BOTTOM_PANEL_HEIGHT = 110;
 
-// Draws a black badge with a '#' prefix + FDI tooth number (white border, white prefix, white
-// number - all-white so the badge reads as neutral labeling rather than status/color-coding).
-const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
+// Draws a badge with a '#' prefix + FDI tooth number (white border, white prefix, white number).
+// `fillColor` defaults to neutral black; pass CORRECTNESS_COLORS.correct/incorrect (below) to
+// color-code the badge itself against ground truth instead - used for the paper's qualitative
+// comparison figure so a reader can see at a glance which predictions are right/wrong, without
+// changing the default (no ground truth known) appearance anywhere else in the tool.
+const CORRECTNESS_COLORS = {
+    correct: 'rgba(27, 158, 63, 0.92)',    // green
+    incorrect: 'rgba(214, 39, 39, 0.92)',  // red
+    unknown: 'rgba(0, 0, 0, 0.85)',        // neutral black - no GT available
+};
+
+const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#', fillColor = CORRECTNESS_COLORS.unknown) => {
     const boxWidth = 180;
     const boxHeight = 118;
     const rx = centerX - boxWidth / 2;
@@ -18,7 +27,7 @@ const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#') => {
     } else {
         ctx.rect(rx, ry, boxWidth, boxHeight);
     }
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillStyle = fillColor;
     ctx.fill();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3.5;
@@ -189,16 +198,18 @@ const drawMirroringOverlay = (predictions, pca) => {
 // drawn alongside - it fits its parabola directly on each tooth centroid's raw image coordinates
 // (see that function's docstring for why the PCA rotation step was dropped). Shown here: each
 // tooth's centroid (yellow dot, still the shared input both PCA and jaw classification reduce
-// every tooth to), the PCA principal axis itself (blue line through pca.center at pca.angle - the
-// arch's estimated main direction, distinct from drawMirroringOverlay's perpendicular midline,
-// and still used for Held-Karp ordering / the quadrant sign check elsewhere), and the resulting
-// Upper/Lower label with the parabola's leading coefficient `a` (whose sign is the entire
-// classification rule - see classifyJawByCurvature's docstring).
+// every tooth to), the fitted parabola itself (blue curve, y = a*x^2 + b*x + c over the
+// centroids' x-range - added for the Methods III-B-1 paper figure), the PCA principal axis
+// separately (blue line through pca.center at pca.angle - the arch's estimated main direction,
+// distinct from drawMirroringOverlay's perpendicular midline, and still used for Held-Karp
+// ordering / the quadrant sign check elsewhere), and the resulting Upper/Lower label with the
+// parabola's leading coefficient `a` (whose sign is the entire classification rule - see
+// classifyJawByCurvature's docstring).
 const drawPcaJawOverlay = (predictions, pca, jawResult) => {
     if (!predictions || predictions.length === 0 || !pca || !currentImage) return;
 
-    predictions.forEach(pred => {
-        const centroid = computeCentroid(pred.polygon);
+    const centroids = predictions.map(pred => computeCentroid(pred.polygon));
+    centroids.forEach(centroid => {
         ctx.beginPath();
         ctx.arc(centroid.x, centroid.y, 9, 0, Math.PI * 2);
         ctx.fillStyle = '#ffeb3b';
@@ -207,6 +218,25 @@ const drawPcaJawOverlay = (predictions, pca, jawResult) => {
         ctx.lineWidth = 2;
         ctx.stroke();
     });
+
+    // The actual fitted parabola (y = a*x^2 + b*x + c) that classifyJawByCurvature's a-sign
+    // check is based on - drawn separately from the PCA axis below since it's a different curve
+    // (see this function's own docstring for why the two are shown together despite jaw
+    // classification no longer using the PCA frame).
+    if (jawResult && typeof jawResult.b === 'number' && typeof jawResult.c === 'number' && centroids.length > 0) {
+        const xsSorted = centroids.map(p => p.x).sort((p, q) => p - q);
+        const xMin = xsSorted[0] - 20;
+        const xMax = xsSorted[xsSorted.length - 1] + 20;
+        ctx.beginPath();
+        for (let i = 0; i <= 60; i++) {
+            const x = xMin + (xMax - xMin) * (i / 60);
+            const y = jawResult.a * x * x + jawResult.b * x + jawResult.c;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = '#2196f3';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+    }
 
     const dx = Math.cos(pca.angle);
     const dy = Math.sin(pca.angle);
@@ -384,19 +414,43 @@ const drawBottomPanel = (complexityLabel, missingNumbers, imageWidth, imageHeigh
     });
 };
 
+// Finds the ground-truth tooth whose centroid is nearest a predicted box's own center, and
+// reports whether that GT tooth's FDI number matches the prediction. This nearest-centroid match
+// (rather than requiring an exact box/polygon overlap) mirrors how the rest of this project
+// establishes tooth identity from position - see functions/graph/tooth.py's own crop-to-GT
+// matching - and tolerates the axis-aligned boxes Ghorbani/Yoon return not lining up pixel-exact
+// with CHAI's segmentation polygons. Returns 'unknown' (neutral) if no GT is available at all.
+const matchGroundTruth = (predFdiNumber, centerX, centerY, gtTeeth) => {
+    if (!gtTeeth || gtTeeth.length === 0) return 'unknown';
+    let nearest = null;
+    let bestDist = Infinity;
+    for (const t of gtTeeth) {
+        const d = (t.cx - centerX) ** 2 + (t.cy - centerY) ** 2;
+        if (d < bestDist) {
+            bestDist = d;
+            nearest = t;
+        }
+    }
+    if (!nearest) return 'unknown';
+    return nearest.fdi_number === predFdiNumber ? 'correct' : 'incorrect';
+};
+
 // Renders a non-CHAI model's own predictions directly - a plain box outline (these models give
 // axis-aligned boxes, not CHAI's segmentation polygons) plus the same FDI badge style used
 // everywhere else, so the two look like the same family of output despite the different pipeline
-// underneath. No color-coding by confidence/correctness - matches drawSegmentation's own
-// "the number badge identifies the tooth, not box color" convention.
+// underneath. Badge fill is color-coded correct/incorrect against `gtTeeth` (server.py's
+// /ground_truth, via runGroundTruthLookup) when available, falling back to neutral black
+// otherwise - added specifically so the paper's qualitative comparison figure makes each model's
+// errors visible at a glance (see matchGroundTruth above).
 // Per-model box color so Ghorbani/Yoon are visually distinguishable at a glance instead of both
-// rendering identically - keyed by getSelectedModel()'s own values ('ghorbani'/'yoon').
+// rendering identically - keyed by getSelectedModel()'s own values ('ghorbani'/'yoon'). This is
+// box-outline color for MODEL IDENTITY, independent of the badge's CORRECTNESS color.
 const EXTERNAL_MODEL_BOX_COLORS = {
     ghorbani: 'rgba(255, 23, 23, 0.95)',   // red
     yoon: 'rgba(33, 150, 243, 0.95)',      // blue
 };
 
-const drawExternalModelBoxes = (predictions, modelKey) => {
+const drawExternalModelBoxes = (predictions, modelKey, gtTeeth) => {
     if (!predictions || predictions.length === 0) return;
 
     const strokeStyle = EXTERNAL_MODEL_BOX_COLORS[modelKey] || 'rgba(255, 255, 255, 0.95)';
@@ -408,7 +462,8 @@ const drawExternalModelBoxes = (predictions, modelKey) => {
 
         const centerX = (x1 + x2) / 2;
         const centerY = (y1 + y2) / 2;
-        drawFdiNumberBadge(centerX, centerY, String(p.fdi_number));
+        const status = matchGroundTruth(p.fdi_number, centerX, centerY, gtTeeth);
+        drawFdiNumberBadge(centerX, centerY, String(p.fdi_number), '#', CORRECTNESS_COLORS[status]);
     });
 };
 
@@ -452,6 +507,16 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     // 'off' wants badges drawn here - it's the only mode that shows the normal labeled content.
     const vizModeNow = getVizMode();
     if (cached && cached.status === 'done' && vizModeNow === 'off') {
+        // Same ground-truth color-coding as drawExternalModelBoxes (Ghorbani/Yoon), so CHAI's own
+        // panel uses the identical green=correct/red=incorrect convention in the paper's
+        // qualitative comparison figure - falls back to neutral black whenever GT isn't available
+        // (e.g. a non-dataset upload), exactly like before this was added.
+        const gtCachedChai = file ? groundTruthCache[file.name] : null;
+        if (file && !gtCachedChai) {
+            runGroundTruthLookup(file);
+        }
+        const gtTeethChai = (gtCachedChai && gtCachedChai.status === 'done' && gtCachedChai.found) ? gtCachedChai.teeth : null;
+
         const tensByVertexIdx = computeHoldingTens(order, cached, predictions, isUpper);
         predictions.forEach((pred, vertexIdx) => {
             const archSeq = order.indexOf(vertexIdx);
@@ -462,7 +527,8 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
 
             const centerX = (pred.box[0] + pred.box[2]) / 2;
             const centerY = (pred.box[1] + pred.box[3]) / 2;
-            drawFdiNumberBadge(centerX, centerY, String(fdiNumber));
+            const status = matchGroundTruth(fdiNumber, centerX, centerY, gtTeethChai);
+            drawFdiNumberBadge(centerX, centerY, String(fdiNumber), '#', CORRECTNESS_COLORS[status]);
         });
     }
 
@@ -538,8 +604,13 @@ const redrawCanvas = () => {
             (selectedModel === 'ghorbani' ? runGhorbaniAnalysis : runYoonAnalysis)(file);
             return;
         }
+        const gtCached = groundTruthCache[file.name];
+        if (!gtCached) {
+            runGroundTruthLookup(file);
+        }
+        const gtTeeth = (gtCached && gtCached.status === 'done' && gtCached.found) ? gtCached.teeth : null;
         if (cached.status === 'done') {
-            drawExternalModelBoxes(cached.predictions, selectedModel);
+            drawExternalModelBoxes(cached.predictions, selectedModel, gtTeeth);
         }
         return;
     }

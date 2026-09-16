@@ -133,8 +133,10 @@ const classifyJawByCurvature = (predictions, pca) => {
     if (Math.abs(detM) < 1e-12) return null; // degenerate (e.g. centroids collinear)
 
     const a = det3([[t2, s3, s2], [t1, s2, s1], [t0, s1, n]]) / detM;
+    const b = det3([[s4, t2, s2], [s3, t1, s1], [s2, t0, n]]) / detM;
+    const c = det3([[s4, s3, t2], [s3, s2, t1], [s2, s1, t0]]) / detM;
 
-    return { isUpper: a > 0, a };
+    return { isUpper: a > 0, a, b, c };
 };
 
 // The FDI quadrant (tens digit) only depends on jaw (upper/lower) + which side of the image's

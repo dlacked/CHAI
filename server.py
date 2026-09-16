@@ -13,6 +13,7 @@ from flask_cors import CORS
 
 # Load config path if needed, or define locally for simplicity
 ROOT = Path(__file__).resolve().parent
+DATASET_DIR = ROOT.parent / "dataset"
 
 # Skips loading the comparison-paper reproductions (Ghorbani's YOLO detect+classify, Yoon's
 # ResNet-101 Cascade R-CNN) - useful when a training run (e.g. Yoon's) already has the GPU mostly
@@ -507,6 +508,53 @@ def yoon_predict():
         return jsonify({'success': True, 'predictions': predictions})
     except Exception as e:
         print(f"Error during Yoon prediction: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# Looks up the AIHub ground-truth FDI number for every tooth in a given test-set image, so the
+# frontend can color-code each model's predicted badges (green=correct, red=incorrect) for the
+# paper's qualitative comparison figure - see js/render.js's drawExternalModelBoxes /
+# drawFdiNumbers. Only covers images actually present in dataset/{split}/labels_json/{jaw}/ (i.e.
+# the AIHub test/val/train split images used throughout this project, not arbitrary uploads).
+@app.route('/ground_truth', methods=['POST'])
+def ground_truth():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+    jaw = payload.get('jaw')
+    image_name = payload.get('image_name')
+    split = payload.get('split', 'test')
+
+    if jaw not in ('upper', 'lower'):
+        return jsonify({'success': False, 'error': f'Invalid jaw: {jaw}'}), 400
+    if not image_name:
+        return jsonify({'success': False, 'error': 'image_name is required'}), 400
+
+    stem = Path(image_name).stem
+    json_path = DATASET_DIR / split / "labels_json" / jaw / f"{stem}.json"
+    if not json_path.exists():
+        # Not an AIHub dataset image (e.g. a fresh upload with no known label) - not an error,
+        # the frontend just has nothing to color-code against.
+        return jsonify({'success': True, 'found': False, 'teeth': []})
+
+    try:
+        import json as _json
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+
+        teeth = []
+        for t in data.get("tooth", []):
+            fdi_number = t.get("teeth_num")
+            seg = t.get("segmentation")
+            if fdi_number is None or not seg:
+                continue
+            poly = np.array(seg, dtype=np.float64)
+            cx, cy = float(poly[:, 0].mean()), float(poly[:, 1].mean())
+            teeth.append({'fdi_number': int(fdi_number), 'cx': cx, 'cy': cy})
+
+        return jsonify({'success': True, 'found': True, 'teeth': teeth})
+    except Exception as e:
+        print(f"Error loading ground truth: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

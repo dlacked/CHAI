@@ -51,6 +51,9 @@ const toothAnalysisCache = {};
 const complexityCache = {};
 const ghorbaniAnalysisCache = {};
 const yoonAnalysisCache = {};
+// GT FDI numbers per test-set image (server.py's /ground_truth), used to color-code predicted
+// badges green/red (correct/incorrect) - see js/render.js's colorForFdiMatch.
+const groundTruthCache = {};
 
 const canvas = document.getElementById('raw-canvas');
 const ctx = canvas.getContext('2d');

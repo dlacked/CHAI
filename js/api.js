@@ -212,6 +212,44 @@ const runGhorbaniAnalysis = (file) =>
 const runYoonAnalysis = (file) =>
     runExternalModelAnalysis(file, 'Yoon', '/yoon_predict', yoonAnalysisCache);
 
+// Looks up AIHub ground truth for `file` (jaw is read off the filename's `lower_`/`upper_`
+// prefix - the convention used throughout this project's dataset, e.g. lower_39956.png - rather
+// than CHAI's own PCA/curvature jaw classifier, since this needs to work for Ghorbani/Yoon too,
+// which have no jaw-classification step of their own). Only meaningful for images that are
+// actually part of the AIHub dataset (server.py returns found:false otherwise, which callers
+// should treat as "no color-coding available", not an error. Caches by file.name and redraws once
+// the result lands, same pattern as every other analysis cache here.
+const runGroundTruthLookup = (file) => {
+    const existing = groundTruthCache[file.name];
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        return;
+    }
+    const jaw = file.name.startsWith('upper_') ? 'upper' : 'lower';
+
+    groundTruthCache[file.name] = { status: 'loading' };
+
+    fetch('/ground_truth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jaw, image_name: file.name }),
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                groundTruthCache[file.name] = { status: 'done', found: data.found, teeth: data.teeth };
+            } else {
+                groundTruthCache[file.name] = { status: 'error', error: data.error };
+                console.error('Ground truth lookup error:', data.error);
+            }
+            redrawCanvas();
+        })
+        .catch(error => {
+            groundTruthCache[file.name] = { status: 'error', error: String(error) };
+            console.error('Server offline or network error:', error);
+            redrawCanvas();
+        });
+};
+
 // For every detected tooth, sends its crop + independent variables (x1, y1, x2, y2, theta -
 // computed the same way as the GT feature extraction pipeline in functions/features/) to the
 // ResNet Tooth model and caches the full 6-class probability vector for each tooth, ordered
