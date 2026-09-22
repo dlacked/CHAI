@@ -2,7 +2,7 @@
 Comp2 (paper label): SEPARATE per-jaw 6-way (last-digit-only) classifiers on fully raw
 coordinates (no PCA, no X-mirror, no Y-flip - functions/features/main_comp2.py's
 ResNet/tooth/csv_comp2/features_{train,val,test}.csv). Isolates "what happens if we skip every
-geometric coordinate transform entirely," unlike Comp3 (train_comp3.py) which only isolates the
+geometric coordinate transform entirely," unlike CHAI (train_chai.py) which only isolates the
 X-mirror step while keeping Y-flip + pooling.
 
 Per-jaw (not pooled) because there's no Y-flip left to align upper/lower jaw coordinate ranges
@@ -12,8 +12,8 @@ once per jaw:
     .venv/Scripts/python.exe ResNet/tooth/train_comp2.py --jaw lower [--resume]
     .venv/Scripts/python.exe ResNet/tooth/train_comp2.py --jaw upper [--resume]
 
-Reuses ToothPositionClassifierNoTheta (4-dim meta, no theta) from train_baseline.py as-is -
-train_baseline.py and its outputs (ResNet/tooth/model_baseline/) are left completely alone.
+Reuses ToothPositionClassifierNoTheta (4-dim meta, no theta) from train_mirrored.py as-is -
+train_mirrored.py and its outputs (ResNet/tooth/model_mirrored/) are left completely alone.
 """
 import sys
 import os
@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 tooth_dir = Path(__file__).resolve().parent
 if str(tooth_dir) not in sys.path:
     sys.path.append(str(tooth_dir))
-from train_baseline import ToothPositionClassifierNoTheta
+from train_mirrored import ToothPositionClassifierNoTheta
 
 project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
@@ -47,7 +47,7 @@ if str(project_root) not in sys.path:
 
 
 class ToothDatasetComp2(Dataset):
-    """Like train_baseline.py's ToothDatasetCombined, but filtered to ONE jaw's rows (Comp2's
+    """Like train_mirrored.py's ToothDatasetCombined, but filtered to ONE jaw's rows (Comp2's
     combined CSV carries both jaws with a `jaw` column - see main_comp2.py - since there's no
     per-jaw file split at the extraction stage, only at training time)."""
 

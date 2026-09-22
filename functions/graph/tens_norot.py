@@ -3,7 +3,7 @@ No-rotation counterpart to tooth.py's compute_tens_predictions: replicates produ
 pre-Hungarian FDI tens-digit (quadrant) guess, but decides left/right from the image's own
 horizontal center (width/2) instead of a per-arch PCA axis (mean_pt + angle).
 
-Same reasoning as functions/features/coords_baseline.py's X mirror: the capture protocol frames
+Same reasoning as functions/features/coords_mirrored.py's X mirror: the capture protocol frames
 the arch centered in the photo (verified: complete arches average ~2deg of PCA-estimated tilt,
 92% within 5deg), and a single missing posterior molar swings the PCA axis by ~13deg on average
 (leave-one-out test, see project notes) - which is exactly the mechanism behind the documented

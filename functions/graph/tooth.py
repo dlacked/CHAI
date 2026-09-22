@@ -10,9 +10,10 @@ that replaced this old arch-refinement Transformer - see that module's docstring
 
 NOTE (2026-08-31): this whole module is currently BROKEN if run directly - CSV_DIR/RESNET_MODEL_DIR/
 ARCH_MODEL_DIR below point at paths that were moved to backups/superseded_20260831/ during the
-Baseline/Comp1-3 cleanup. Its individual functions (compute_missing_vs_complete_metrics etc.) are
-still imported and reused directly by ad-hoc eval scripts against the new Baseline/Comp1/Comp2/Comp3
-models - don't "fix" the module-level paths without checking those call sites first.
+Mirrored Variant/Comp1-3 cleanup. Its individual functions (compute_missing_vs_complete_metrics
+etc.) are still imported and reused directly by ad-hoc eval scripts against the Mirrored
+Variant/Comp1/Comp2/CHAI models - don't "fix" the module-level paths without checking those call
+sites first.
 
 Leads with macro F1 rather than accuracy: with the last-digit classes this imbalanced (incisors
 vastly outnumber missing/rare positions), accuracy alone can look flat even as rare-class
@@ -52,12 +53,14 @@ DATASET_DIR = PROJECT_ROOT.parent / "dataset"   # .../CHAI/dataset
 RESULTS_DIR = GRAPH_DIR / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Baseline (paper label, "CHAI (Ours)") as of 2026-08-31 - was variant A's ResNet/tooth/{csv,model}
-# (now backups/superseded_20260831/), fixed to point here so evaluate_tooth_number() actually
-# evaluates the model the paper reports, not a retired one. csv_baseline is ONE combined
-# (both-jaws, `jaw` column) file per split, not per-jaw files - see build_baseline_arch_sequences.
-CSV_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "csv_baseline"
-RESNET_MODEL_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "model_baseline"
+# The Mirrored Variant (paper ablation label; formerly the main "Baseline"/"CHAI (Ours)" model
+# before CHAI was redefined - see ResNet/tooth/train_chai.py, now the official model) - was
+# variant A's ResNet/tooth/{csv,model} (now backups/superseded_20260831/), fixed to point here so
+# evaluate_tooth_number() actually evaluates the ablation checkpoint the paper reports, not a
+# retired one. csv_mirrored is ONE combined (both-jaws, `jaw` column) file per split, not per-jaw
+# files - see build_mirrored_arch_sequences.
+CSV_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "csv_mirrored"
+RESNET_MODEL_DIR = PROJECT_ROOT / "ResNet" / "tooth" / "model_mirrored"
 ARCH_MODEL_DIR = PROJECT_ROOT / "backups" / "superseded_20260831" / "ViT_arch" / "model"  # retired
 
 # Metrics in recommended-first order - every plot/print below shows whichever of these are
@@ -279,8 +282,8 @@ def load_fdi_numbers_per_arch(csv_path, max_teeth_per_arch=12):
     lets per-tooth predictions be attributed back to a specific FDI number.
 
     NOTE (2026-08-31): evaluate_tooth_number() no longer calls this - it builds fdi_number lists
-    itself, in the same pass as the ResNet forward pass, inside build_baseline_arch_sequences
-    (needed since csv_baseline is one combined-jaws CSV, not per-jaw files, so grouping needs a
+    itself, in the same pass as the ResNet forward pass, inside build_mirrored_arch_sequences
+    (needed since csv_mirrored is one combined-jaws CSV, not per-jaw files, so grouping needs a
     jaw filter first anyway - doing both in one pass avoids filtering twice). Left here, unused,
     in case anything still wants a standalone FDI-numbers-per-arch reader for a per-jaw CSV."""
     rows = []
@@ -302,33 +305,33 @@ def load_fdi_numbers_per_arch(csv_path, max_teeth_per_arch=12):
     return fdi_lists
 
 
-def build_baseline_arch_sequences(jaw, split, dataset_dir, csv_dir, model_dir, device, max_teeth_per_arch=12):
-    """Baseline counterpart to the old (variant-A) arch_build.build_split
-    (backups/superseded_20260831/ViT_arch/build_dataset.py): runs the Baseline ResNet model
-    (ToothPositionClassifierNoTheta, train_baseline.py - 4-dim meta, no theta, pooled both-jaws)
-    over one jaw's arches, grouped by image_name, and returns per-tooth softmax probabilities in
-    the same arch-sequence shape evaluate_tooth_number() expects.
+def build_mirrored_arch_sequences(jaw, split, dataset_dir, csv_dir, model_dir, device, max_teeth_per_arch=12):
+    """Mirrored Variant counterpart to the old (variant-A) arch_build.build_split
+    (backups/superseded_20260831/ViT_arch/build_dataset.py): runs the Mirrored Variant ResNet
+    model (ToothPositionClassifierNoTheta, train_mirrored.py - 4-dim meta, no theta, pooled
+    both-jaws) over one jaw's arches, grouped by image_name, and returns per-tooth softmax
+    probabilities in the same arch-sequence shape evaluate_tooth_number() expects.
 
-    csv_baseline is ONE combined (`jaw` column) CSV per split - filtered to this jaw here (same
+    csv_mirrored is ONE combined (`jaw` column) CSV per split - filtered to this jaw here (same
     trick as Transformer/complexity/build_dataset.py and ResNet/tooth/train_comp2.py use), and
-    since main_baseline.py writes one jaw's rows fully before starting the other, filtering still
-    leaves each image's rows contiguous and in Held-Karp arch order.
+    since main_mirrored.py writes one jaw's rows fully before starting the other, filtering still
+    leaves each image's rows contiguous and in (X-sort) arch order.
 
     No `geom`/`img_vec` fields in the returned sequences (unlike the old build_split) - those fed
-    the old arch-refinement Transformer's own two extra input branches, which has no
-    Baseline-compatible equivalent, so evaluate_tooth_number()'s y_vit column falls back to
-    y_resnet for every arch (ARCH_MODEL_DIR / f"{jaw}_best.pth" simply won't exist under
-    Baseline's naming, so that fallback triggers automatically - see that function's arch_model
-    handling).
+    the old arch-refinement Transformer's own two extra input branches, which has no Mirrored
+    Variant-compatible equivalent, so evaluate_tooth_number()'s y_vit column falls back to
+    y_resnet for every arch (ARCH_MODEL_DIR / f"{jaw}_best.pth" simply won't exist under the
+    Mirrored Variant's naming, so that fallback triggers automatically - see that function's
+    arch_model handling).
 
     Returns (sequences, fdi_number_lists):
       sequences: [{"image_name": str, "target": LongTensor[n], "prob_vec": FloatTensor[n, 6]}, ...]
       fdi_number_lists: parallel list of this arch's true FDI numbers, same order as target.
     """
-    train_baseline_module = load_module(
-        "train_baseline_eval", PROJECT_ROOT / "ResNet" / "tooth" / "train_baseline.py"
+    train_mirrored_module = load_module(
+        "train_mirrored_eval", PROJECT_ROOT / "ResNet" / "tooth" / "train_mirrored.py"
     )
-    ToothPositionClassifierNoTheta = train_baseline_module.ToothPositionClassifierNoTheta
+    ToothPositionClassifierNoTheta = train_mirrored_module.ToothPositionClassifierNoTheta
 
     csv_path = Path(csv_dir) / f"features_{split}.csv"
     rows = []
@@ -453,11 +456,11 @@ def evaluate_tooth_number():
     for jaw in ("lower", "upper"):
         csv_path = CSV_DIR / "features_test.csv"
         if not csv_path.exists():
-            print(f"Error: {csv_path} not found. Run functions/features/main_baseline.py first.")
+            print(f"Error: {csv_path} not found. Run functions/features/main_mirrored.py first.")
             continue
 
-        print(f"\nBuilding {jaw}/test arch sequences (Baseline ResNet forward pass)...")
-        sequences, fdi_number_lists = build_baseline_arch_sequences(
+        print(f"\nBuilding {jaw}/test arch sequences (Mirrored Variant ResNet forward pass)...")
+        sequences, fdi_number_lists = build_mirrored_arch_sequences(
             jaw, "test", str(DATASET_DIR), str(CSV_DIR), str(RESNET_MODEL_DIR), device
         )
         # Production's actual (geometry-only, occasionally wrong) tens-digit guess - used below
@@ -472,12 +475,12 @@ def evaluate_tooth_number():
         # arch_model is ALWAYS None now (was: loaded from ARCH_MODEL_DIR if weights existed there).
         # The old arch-refinement Transformer (backups/superseded_20260831/ViT_arch/model.py)
         # takes a DIFFERENT geometry format as input (5-dim PCA-rotated [x1,y1,x2,y2,theta] +
-        # its own img_vec branch) than build_baseline_arch_sequences produces (4-dim raw
-        # [x1,y1,x2,y2], no img_vec) - feeding it Baseline's geometry would be silently wrong, not
-        # just "missing," so this comparison is disabled entirely rather than attempted with
-        # mismatched inputs. y_vit falls back to y_resnet for every arch (matching the existing
-        # eval_baseline_methods.py convention noted in project notes) until/unless a
-        # Baseline-compatible arch-refinement model exists to compare against.
+        # its own img_vec branch) than build_mirrored_arch_sequences produces (4-dim raw
+        # [x1,y1,x2,y2], no img_vec) - feeding it the Mirrored Variant's geometry would be silently
+        # wrong, not just "missing," so this comparison is disabled entirely rather than attempted
+        # with mismatched inputs. y_vit falls back to y_resnet for every arch (matching the
+        # existing eval_baseline_methods.py convention noted in project notes) until/unless a
+        # Mirrored Variant-compatible arch-refinement model exists to compare against.
         arch_model = None
         print(f"Old arch-refinement Transformer disabled for {jaw} (incompatible input format, see comment above) - "
               f"ResNet+ViT column falls back to ResNet-only.")

@@ -129,7 +129,7 @@ updateVisualizationSectionVisibility();
 
 // Debug overlay radios don't fetch anything new - everything they draw comes from data
 // already cached by the pipeline - so a redraw is all that's needed.
-[vizOffRadio, vizSegmentationRadio, vizPcaRadio, vizHeldKarpRadio, vizMirroringRadio, vizCropRadio].forEach(radio => {
+[vizOffRadio, vizSegmentationRadio, vizPcaRadio, vizArchOrderRadio, vizMirroringRadio, vizCropRadio].forEach(radio => {
     radio.addEventListener('change', () => {
         if (!radio.checked) return;
         redrawCanvas();

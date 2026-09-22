@@ -1,20 +1,21 @@
 """
-This is Comp1 (paper label) - ablation counterpart to train_baseline.py (Baseline, "CHAI (Ours)"):
-"what role do coordinates actually play." Trains the SAME pooled (both-jaws-combined, 6-way)
-setup as Baseline, but with NO coordinate/meta features at all - image only. Reuses
-train_baseline.py's csv_baseline data and ToothDatasetCombined as-is (x1/y1/x2/y2 columns are read
-but simply never handed to the model), so Comp1 differs from Baseline in exactly one way:
-ToothPositionClassifierImageOnly drops the meta_fc branch and its concatenation entirely,
-classifying straight off the ResNet image features.
+This is Comp1 (paper label) - ablation counterpart to train_mirrored.py (the Mirrored Variant,
+formerly the main "Baseline"/"CHAI (Ours)" model before CHAI was redefined - see train_chai.py,
+now the official model): "what role do coordinates actually play." Trains the SAME pooled
+(both-jaws-combined, 6-way) setup as the Mirrored Variant, but with NO coordinate/meta features at
+all - image only. Reuses train_mirrored.py's csv_mirrored data and ToothDatasetCombined as-is
+(x1/y1/x2/y2 columns are read but simply never handed to the model), so Comp1 differs from the
+Mirrored Variant in exactly one way: ToothPositionClassifierImageOnly drops the meta_fc branch and
+its concatenation entirely, classifying straight off the ResNet image features.
 
-Comparing Comp1 against Baseline isolates "how much do coordinates help at all" - compare against
-Comp2 (train_baseline.py run against csv_comp2 instead, see
-functions/features/main_comp2.py) for "does mirroring specifically matter," and Comp3
-(train_comp3.py) for "does the separate geometric-tens-assignment + Hungarian pipeline matter."
+Comparing Comp1 against the Mirrored Variant isolates "how much do coordinates help at all" -
+compare against Comp2 (train_mirrored.py run against csv_comp2 instead, see
+functions/features/main_comp2.py) for "does mirroring specifically matter," and CHAI
+(train_chai.py) for "does the separate geometric-tens-assignment + Hungarian pipeline matter."
 The old variant-E attempt at "does mirroring matter" (train_e12way.py, per-jaw + baseline A's PCA
 rotation) is superseded by Comp2 and moved to backups/superseded_20260831/.
 
-train_baseline.py and its outputs (ResNet/tooth/model_baseline/) are left completely alone.
+train_mirrored.py and its outputs (ResNet/tooth/model_mirrored/) are left completely alone.
 
 Usage:
     .venv/Scripts/python.exe ResNet/tooth/train_imageonly.py [--resume]
@@ -38,7 +39,7 @@ tooth_dir = Path(__file__).resolve().parent
 if str(tooth_dir) not in sys.path:
     sys.path.append(str(tooth_dir))
 from train import ToothPositionClassifier
-from train_baseline import ToothDatasetCombined
+from train_mirrored import ToothDatasetCombined
 
 project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
@@ -251,14 +252,14 @@ def train_model(dataset_dir, train_csv_path, val_csv_path, model_save_path, runs
 
 def main():
     dataset_dir = project_root.parent / "dataset"
-    csv_dir = project_root / "ResNet" / "tooth" / "csv_baseline"
+    csv_dir = project_root / "ResNet" / "tooth" / "csv_mirrored"
     model_dir = project_root / "ResNet" / "tooth" / "model_comp1"
     runs_dir = project_root / "ResNet" / "tooth" / "runs_comp1"
 
     parser = argparse.ArgumentParser(description="Train a combined (both jaws), image-only (no coordinates) 6-way tooth digit classifier.")
     parser.add_argument("--dataset_dir", type=str, default=str(dataset_dir))
     parser.add_argument("--csv_dir", type=str, default=str(csv_dir),
-                        help="Reuses csv_baseline (x1..y2 columns present but unused)")
+                        help="Reuses csv_mirrored (x1..y2 columns present but unused)")
     parser.add_argument("--model_dir", type=str, default=str(model_dir))
     parser.add_argument("--runs_dir", type=str, default=str(runs_dir))
     parser.add_argument("--epochs", type=int, default=1000)

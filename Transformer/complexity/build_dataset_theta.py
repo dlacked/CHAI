@@ -70,7 +70,7 @@ def build_split(jaw, split, dataset_dir, csv_dir):
 def main():
     dataset_dir_default = PROJECT_ROOT.parent / "dataset"
     # Old per-jaw PCA-rotated/mirrored CSVs (with theta) - moved to backups/ during the
-    # 2026-08-31 cleanup since the tooth-numbering model now uses coords_baseline.py instead.
+    # 2026-08-31 cleanup since the tooth-numbering model now uses coords_mirrored.py instead.
     csv_dir_default = PROJECT_ROOT / "backups" / "superseded_20260831" / "ResNet_tooth_csv"
     cache_dir_default = COMPLEXITY_DIR / "cache_theta"
 

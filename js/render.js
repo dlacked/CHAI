@@ -112,10 +112,10 @@ const drawRawSegmentation = (predictions) => {
     });
 };
 
-// "Held-Karp Order" debug view: the exact arch traversal computeArchOrder finds - a numbered
-// badge (1, 2, 3, ...) at each tooth's centroid, joined by lines in that order, so the
-// shortest-Hamiltonian-path result is visible directly instead of inferred from FDI badges.
-const drawHeldKarpOrder = (predictions, pca, isUpper) => {
+// "Arch Order" debug view: the exact traversal computeArchOrder finds - a numbered badge
+// (1, 2, 3, ...) at each tooth's centroid, joined by lines in that order, so the X-sort result
+// is visible directly instead of inferred from FDI badges.
+const drawArchOrder = (predictions, pca, isUpper) => {
     if (!predictions || predictions.length === 0 || !pca) return;
 
     const vertices = predictions.map(pred => computeCentroid(pred.polygon));
@@ -201,7 +201,7 @@ const drawMirroringOverlay = (predictions, pca) => {
 // every tooth to), the fitted parabola itself (blue curve, y = a*x^2 + b*x + c over the
 // centroids' x-range - added for the Methods III-B-1 paper figure), the PCA principal axis
 // separately (blue line through pca.center at pca.angle - the arch's estimated main direction,
-// distinct from drawMirroringOverlay's perpendicular midline, and still used for Held-Karp
+// distinct from drawMirroringOverlay's perpendicular midline, and still used for arch
 // ordering / the quadrant sign check elsewhere), and the resulting Upper/Lower label with the
 // parabola's leading coefficient `a` (whose sign is the entire classification rule - see
 // classifyJawByCurvature's docstring).
@@ -304,11 +304,12 @@ const drawCropBoxesOverlay = (predictions) => {
 };
 
 // Determines each detected tooth's FDI tens digit (quadrant) in the Holding state: uses the
-// server-refined `mirror` flag (derived from raw digit occurrence sequence before Hungarian
-// assignment) when available, falling back to the image-center (width/2) geometric guess if
-// missing - same width/2 split /tooth_predict itself uses (see computeToothMetaPooled), not PCA,
-// so the Holding-state preview never disagrees with the real server response for a different
-// reason than "the server saw more/different information."
+// server's `mirror` flag (CHAI's own local-quadrant prediction, decoded from its unified 12-way
+// class12 output after the whole-arch Hungarian assignment - see server.py /tooth_predict and
+// ResNet/tooth/postprocess.py's resolve_arch_chai) when available, falling back to the
+// image-center (width/2) geometric guess if missing - not PCA, so the Holding-state preview never
+// disagrees with the real server response for a different reason than "the server saw more/
+// different information."
 const computeHoldingTens = (order, cached, predictions, isUpper) => {
     const tensByVertexIdx = new Array(predictions.length).fill(null);
     order.forEach((vertexIdx, i) => {
@@ -501,7 +502,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
     // the analysis is still loading, just show a pending status - no debug overlay.
     const cached = file ? toothAnalysisCache[file.name] : null;
 
-    // A debug overlay (Segmentation / Held-Karp / Mirroring / Crop Boxes) owns the canvas when
+    // A debug overlay (Segmentation / Arch Order / Mirroring / Crop Boxes) owns the canvas when
     // active - the analysis calls above still run so the sidebar stays live, but the FDI badges
     // themselves are left to redrawCanvas's overlay dispatch instead of being drawn here. Only
     // 'off' wants badges drawn here - it's the only mode that shows the normal labeled content.
@@ -538,7 +539,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
 };
 
 // CHAI's own view: draws on the full, unaltered photo, no cropping. Handles both the normal
-// (Off) labeled view and every debug overlay (Segmentation / PCA & Jaw / Held-Karp / Mirroring /
+// (Off) labeled view and every debug overlay (Segmentation / PCA & Jaw / Arch Order / Mirroring /
 // Crop Boxes), dispatched on vizMode below. Always resizes the canvas itself (image size + bottom
 // panel).
 const drawFullChaiView = (predictions, fdiByIndex, pca, jawResult, isUpper, hasClassification, file, vizMode) => {
@@ -556,8 +557,8 @@ const drawFullChaiView = (predictions, fdiByIndex, pca, jawResult, isUpper, hasC
         drawRawSegmentation(predictions);
     } else if (vizMode === 'pca') {
         drawPcaJawOverlay(predictions, pca, jawResult);
-    } else if (vizMode === 'heldkarp') {
-        drawHeldKarpOrder(predictions, pca, isUpper);
+    } else if (vizMode === 'archorder') {
+        drawArchOrder(predictions, pca, isUpper);
     } else if (vizMode === 'mirroring') {
         drawMirroringOverlay(predictions, pca);
     } else if (vizMode === 'crop') {
@@ -583,7 +584,7 @@ const redrawCanvas = () => {
     const file = imageFiles[currentImageIndex];
     const selectedModel = getSelectedModel();
 
-    // Ghorbani/Yoon are self-contained full-image models - no CHAI segmentation, no PCA/Held-Karp
+    // Ghorbani/Yoon are self-contained full-image models - no CHAI segmentation, no PCA/arch-order
     // arch ordering, no Arch Complexity model of their own (that's CHAI-specific geometry, not
     // part of either paper) - so this branch skips straight to their own /*_predict endpoint and
     // renders just the FDI-number boxes it returns, no bottom panel (only the 'chai' branch below

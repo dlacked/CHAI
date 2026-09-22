@@ -203,14 +203,16 @@ const computeToothMeta = (pred, pca) => {
     };
 };
 
-// Baseline-model counterpart to computeToothMeta: computes the [x1, y1, x2, y2] independent
-// variables the Baseline ResNet Tooth model was trained on (see
-// functions/features/coords_baseline.py + ResNet/tooth/train_baseline.py) - used ONLY by the
-// tooth-number prediction path (js/api.js runToothAnalysis -> /tooth_predict). computeToothMeta
-// itself is left untouched because js/render.js's Arch Complexity call (drawFdiNumbers) still
-// needs its old PCA-rotated output (the Transformer/complexity model's own training data still
-// uses that per-jaw PCA-rotated coordinate scheme - see that model's docstring - it just dropped
-// the theta column, not the rotation).
+// Mirrored Variant counterpart to computeToothMeta: computes the [x1, y1, x2, y2] independent
+// variables the retired Mirrored Variant ResNet Tooth model was trained on (see
+// functions/features/coords_mirrored.py + ResNet/tooth/train_mirrored.py) - no remaining call
+// sites as of the CHAI codebase rename (js/api.js runToothAnalysis now uses
+// computeToothMetaComplexity instead, CHAI's own unmirrored convention). Left in place rather
+// than deleted, same rollback-safety rationale as server.py's unused per-jaw tooth_models dict.
+// computeToothMeta itself is left untouched because js/render.js's Arch Complexity call
+// (drawFdiNumbers) still needs its old PCA-rotated output (the Transformer/complexity model's own
+// training data still uses that per-jaw PCA-rotated coordinate scheme - see that model's
+// docstring - it just dropped the theta column, not the rotation).
 //
 // Two things differ from computeToothMeta: no PCA rotation at all (the bbox is taken directly
 // from the raw polygon, and the mirror/flip axes are the image's own geometry - width/2, height -
@@ -259,17 +261,18 @@ const computeToothMetaPooled = (pred, isUpper) => {
     };
 };
 
-// Arch Complexity Transformer's coordinate scheme (see functions/features/coords_comp3.py's
-// get_normalized_coords_comp3, which Transformer/complexity/build_dataset.py's cache is built
-// from as of 2026-08-31): no PCA rotation, no X-mirror (unlike computeToothMetaPooled - the
-// Complexity task needs the true whole-arch left-right shape, which X-mirror would fold away),
-// Y-flip kept for the whole lower jaw (jaw-frame alignment, matching coords_baseline.py's Y flip
-// - needed so Transformer/complexity/train_pooled.py's pooled model sees one consistent
-// convention). Replaces the old computeToothMeta(pred, pca) call this model used before the
-// coordinate-scheme swap. computeToothMeta itself now has NO remaining call sites anywhere (the
-// "Coords Mirroring" debug overlay, js/render.js drawMirroringOverlay, only ever duplicated its
-// PCA mirror-decision logic inline, never actually called it) - left in place rather than
-// deleted, same rollback-safety rationale as server.py's unused per-jaw tooth_models dict.
+// Shared by the Arch Complexity Transformer and CHAI's own tooth-number classifier - both use the
+// identical coordinate scheme (see functions/features/coords_chai.py's
+// get_normalized_coords_chai, which both Transformer/complexity/build_dataset.py's cache and
+// js/api.js runToothAnalysis's /tooth_predict payload are built from): no PCA rotation, no
+// X-mirror (unlike the retired Mirrored Variant's computeToothMetaPooled - both tasks need the
+// true whole-arch left-right shape / quadrant signal, which X-mirror would fold away), Y-flip
+// kept for the whole lower jaw (jaw-frame alignment, matching coords_chai.py's Y flip). Replaces
+// the old computeToothMeta(pred, pca) call the Complexity model used before its coordinate-scheme
+// swap. computeToothMeta itself now has NO remaining call sites anywhere (the "Coords Mirroring"
+// debug overlay, js/render.js drawMirroringOverlay, only ever duplicated its PCA mirror-decision
+// logic inline, never actually called it) - left in place rather than deleted, same
+// rollback-safety rationale as server.py's unused per-jaw tooth_models dict.
 const computeToothMetaComplexity = (pred, isUpper) => {
     let x1_c = Infinity, x2_c = -Infinity, y1_c = Infinity, y2_c = -Infinity;
     pred.polygon.forEach(pt => {
@@ -308,12 +311,14 @@ const computeCentroid = (polygon) => {
     return { x: sumX / polygon.length, y: sumY / polygon.length };
 };
 
-// Builds the shortest possible path through all teeth via Held-Karp dynamic programming,
-// starting from the leftmost tooth. Unlike nearest-neighbor greedy, this finds the globally
-// optimal path rather than a locally greedy one - for points strung along a single curve like
-// a dental arch, the shortest path reliably follows the curve's true order, even in edge cases
-// where greedy can leave a straggler tooth that needs a long final jump. With at most ~15-20
-// teeth the O(2^n * n^2) cost is trivial (well under a millisecond).
+// Orders teeth by their PCA-rotated x coordinate (left-to-right along the arch's main axis).
+// An earlier version instead solved for the shortest Hamiltonian path via Held-Karp dynamic
+// programming; an ablation study (see the paper's Supplementary Material) found this added no
+// measurable benefit to the pipeline's final tens-digit/quadrant accuracy - the downstream
+// digit-occurrence-order correction step only needs the coarse left/right split to be correct,
+// and this plain sort gets that right just as often, at a fraction of the cost. `isUpper` is
+// unused now (kept for call-site compatibility) - the rotated-x sign convention is the same for
+// both jaws.
 const computeArchOrder = (vertices, pca, isUpper) => {
     const n = vertices.length;
     if (n === 0) return [];
@@ -325,110 +330,9 @@ const computeArchOrder = (vertices, pca, isUpper) => {
         return (pt.x - pca.center.x) * cos - (pt.y - pca.center.y) * sin;
     };
 
-    const getRotatedY = (pt) => {
-        if (!pca) return pt.y;
-        const cos = Math.cos(-pca.angle);
-        const sin = Math.sin(-pca.angle);
-        return (pt.x - pca.center.x) * sin + (pt.y - pca.center.y) * cos;
-    };
-
-    let startIdx = 0;
-    let targetVal = isUpper ? -Infinity : Infinity;
-
-    vertices.forEach((pt, i) => {
-        const rx = getRotatedX(pt);
-        const ry = getRotatedY(pt);
-        if (rx < 0) { // Left side of the arch
-            if (isUpper) {
-                if (ry > targetVal) {
-                    targetVal = ry;
-                    startIdx = i;
-                }
-            } else {
-                if (ry < targetVal) {
-                    targetVal = ry;
-                    startIdx = i;
-                }
-            }
-        }
-    });
-
-    // Fallback if no vertex is on the left side or if targetVal was not updated
-    if (targetVal === -Infinity || targetVal === Infinity) {
-        let minRotX = Infinity;
-        vertices.forEach((pt, i) => {
-            const rx = getRotatedX(pt);
-            if (rx < minRotX) {
-                minRotX = rx;
-                startIdx = i;
-            }
-        });
-    }
-
-    if (n === 1) return [startIdx];
-
-    // Precompute pairwise distances between every pair of teeth
-    const dist = Array.from({ length: n }, () => new Array(n).fill(0));
-    for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-            const dx = vertices[i].x - vertices[j].x;
-            const dy = vertices[i].y - vertices[j].y;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            dist[i][j] = d;
-            dist[j][i] = d;
-        }
-    }
-
-    // dp[mask][j] = shortest path that visits exactly the teeth in `mask` (always including
-    // startIdx) and ends at tooth j. parent[mask][j] records the tooth visited right before j.
-    const size = 1 << n;
-    const dp = Array.from({ length: size }, () => new Array(n).fill(Infinity));
-    const parent = Array.from({ length: size }, () => new Array(n).fill(-1));
-
-    const startMask = 1 << startIdx;
-    dp[startMask][startIdx] = 0;
-
-    for (let mask = 0; mask < size; mask++) {
-        if (!(mask & startMask)) continue; // every path must include the starting tooth
-        for (let j = 0; j < n; j++) {
-            if (!(mask & (1 << j))) continue;
-            const costToJ = dp[mask][j];
-            if (costToJ === Infinity) continue;
-
-            for (let k = 0; k < n; k++) {
-                if (mask & (1 << k)) continue; // already visited
-                const nextMask = mask | (1 << k);
-                const newCost = costToJ + dist[j][k];
-                if (newCost < dp[nextMask][k]) {
-                    dp[nextMask][k] = newCost;
-                    parent[nextMask][k] = j;
-                }
-            }
-        }
-    }
-
-    // Pick whichever tooth minimizes total path length once every tooth has been visited
-    const fullMask = size - 1;
-    let bestEnd = startIdx;
-    let bestCost = Infinity;
-    for (let j = 0; j < n; j++) {
-        if (dp[fullMask][j] < bestCost) {
-            bestCost = dp[fullMask][j];
-            bestEnd = j;
-        }
-    }
-
-    // Reconstruct the path by walking the parent pointers backward from the end
-    const order = [];
-    let mask = fullMask;
-    let curr = bestEnd;
-    while (curr !== -1) {
-        order.push(curr);
-        const prev = parent[mask][curr];
-        mask ^= (1 << curr);
-        curr = prev;
-    }
-    order.reverse();
-    return order;
+    return vertices
+        .map((pt, i) => ({ i, rx: getRotatedX(pt) }))
+        .sort((a, b) => a.rx - b.rx)
+        .map(({ i }) => i);
 };
 

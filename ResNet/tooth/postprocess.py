@@ -1,13 +1,17 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-# Shared context for the three post-processes below: server.py /tooth_predict's per-tooth argmax
-# has no way to know two teeth in the same quadrant claimed the same last digit (anatomically
-# impossible - a quadrant has at most one of each). All three take the same (probs, group_keys)
-# shape and only differ in how they resolve that conflict once found - see each docstring for
-# the trade-off. A held-out test comparison (see resolve_quadrant_duplicates) is what replaced
-# the old arch-refinement Transformer step (now retired to backups/superseded_20260831/ViT_arch/)
-# with resolve_quadrant_duplicates in production.
+# server.py /tooth_predict now uses resolve_arch_chai (CHAI, the official model - a plain
+# capacity-1 Hungarian assignment over the unified 12-way class, no quadrant grouping needed).
+# Everything below it is the retired Mirrored Variant's post-process family, kept for the
+# ablation checkpoint (ResNet/tooth/model_mirrored/) and functions/graph/tooth.py's held-out
+# evaluation of it: server.py /tooth_predict's per-tooth argmax there had no way to know two teeth
+# in the same quadrant claimed the same last digit (anatomically impossible - a quadrant has at
+# most one of each). Those three take the same (probs, group_keys) shape and only differ in how
+# they resolve that conflict once found - see each docstring for the trade-off. A held-out test
+# comparison (see resolve_quadrant_duplicates) is what replaced the old arch-refinement
+# Transformer step (now retired to backups/superseded_20260831/ViT_arch/) with
+# resolve_quadrant_duplicates in production, before CHAI replaced that whole family in turn.
 
 
 def correct_mirrors_by_digit_occurrence(raw_pred, mirrors):
@@ -111,6 +115,35 @@ def resolve_arch_duplicates(probs):
     return result
 
 
+def resolve_arch_chai(probs):
+    """CHAI's whole-arch resolution: a standard capacity-1 Hungarian assignment over the unified
+    12-way (local-quadrant x last-digit) probabilities - see access.tex's Methods section (cost
+    matrix C_{i,k} = -log(max(P_{i,k}, eps)), sigma = Hungarian's optimal one-to-one assignment).
+    Unlike the retired Mirrored Variant's resolve_arch_duplicates (6-way digit only, needed
+    virtual-column duplication for capacity 2), class12 already encodes quadrant, so each of the
+    12 classes can be claimed by at most one tooth and a plain one-to-one assignment is enough -
+    no separate quadrant-grouping or digit-occurrence step is needed at all.
+
+    probs: (n, 12) softmax probabilities, one row per tooth (arch order doesn't matter -
+    Hungarian is order-invariant - but the caller's rows still line up 1:1 with its input rows).
+    Returns an (n,) array of 0-indexed class12 predictions (0-11).
+    """
+    n = probs.shape[0]
+    if n == 0:
+        return np.array([], dtype=int)
+    if n > 12:
+        # More teeth than a full arch has slots for - over-detection is already a rare edge
+        # case elsewhere in this pipeline; leave it as independent argmax rather than forcing an
+        # assignment that can't possibly be anatomically meaningful past 12 teeth.
+        return probs.argmax(axis=1)
+
+    cost = -np.log(np.clip(probs, 1e-8, 1.0))
+    row_ind, col_ind = linear_sum_assignment(cost)
+    result = np.zeros(n, dtype=int)
+    result[row_ind] = col_ind
+    return result
+
+
 def _group_ranges(group_keys, n):
     """Contiguous runs of equal keys -> [(start, end), ...] half-open ranges. Shared by all three
     resolvers below; the only thing they disagree on is what to do inside each range."""
@@ -174,13 +207,13 @@ def resolve_quadrant_monotonic(probs, group_keys):
     forces the assigned digits to strictly increase away from the midline (the real anatomical
     constraint - FDI digits run 1..6 outward in every quadrant), not just be duplicate-free.
     The first group encountered is assumed to run posterior-to-midline (digit descends as
-    position increases - true for whichever quadrant a Held-Karp arch order reaches first) and
+    position increases - true for whichever quadrant the arch order reaches first) and
     every group after it midline-to-posterior (digit ascends); solved as a small O(6) longest-
     weighted-increasing-subsequence DP per group (reverse the row order first for a descending
     group, solve ascending, then un-reverse).
 
     On a held-out test this ends up *worse* than the weaker duplicate-only version despite being
-    the "more correct" constraint on paper: Held-Karp's arch ordering is only right ~99% of the
+    the "more correct" constraint on paper: the arch ordering step is only right ~99% of the
     time, and forcing strict monotonicity on top of a wrong order doesn't just miss that one
     tooth, it can cascade and break neighboring teeth that were already correct. Kept here as a
     comparison point, not because it won.

@@ -279,11 +279,13 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
 
     const vertices = predictions.map(pred => computeCentroid(pred.polygon));
     const order = computeArchOrder(vertices, pca, jaw === 'upper');
-    // Baseline model (no PCA rotation anywhere, no theta - see computeToothMetaPooled's
-    // docstring), not computeToothMeta - that one has no call sites left at all as of
-    // 2026-08-31 (js/render.js drawFdiNumbers switched to computeToothMetaComplexity when the
-    // Arch Complexity Transformer's own coordinate scheme moved off PCA too).
-    const metas = predictions.map(pred => computeToothMetaPooled(pred, jaw === 'upper'));
+    // CHAI (no PCA rotation, no X-mirror, Y-flip for the lower jaw only - see
+    // computeToothMetaComplexity's docstring, which already matches coords_chai.py's convention
+    // exactly; it was originally added for the Arch Complexity Transformer but CHAI needs the
+    // identical unmirrored coordinates, so it's reused here rather than duplicated). Not
+    // computeToothMetaPooled - that was the retired Mirrored Variant's X-mirrored convention, and
+    // not computeToothMeta, which has no call sites left at all as of 2026-08-31.
+    const metas = predictions.map(pred => computeToothMetaComplexity(pred, jaw === 'upper'));
 
     const teeth = order.map(idx => ({
         crop: cropToothImage(currentImage, predictions[idx].box),
@@ -291,7 +293,6 @@ const runToothAnalysis = (file, jaw, predictions, pca) => {
         y1: metas[idx].y1,
         x2: metas[idx].x2,
         y2: metas[idx].y2,
-        mirror: metas[idx].mirror
     }));
 
     fetch('/tooth_predict', {

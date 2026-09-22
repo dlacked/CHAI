@@ -1,22 +1,23 @@
 """
-CSV builder for Comp2 (paper label; ablation of Baseline = functions/features/main_baseline.py /
-coords_baseline.py, "CHAI (Ours)"): last-digit-only (6-way), fully raw coordinates (no PCA
-rotation, no X-mirror, no Y-flip - see coords_comp2.py's docstring) - isolates "what happens if
-we skip every geometric coordinate transform entirely," as opposed to Comp3 (main_comp3.py) which
-only isolates the X-mirror step.
+CSV builder for Comp2 (paper label; ablation of the Mirrored Variant = functions/features/
+main_mirrored.py / coords_mirrored.py, formerly "Baseline"/"CHAI (Ours)" before CHAI was
+redefined - see main_chai.py, now the official model): last-digit-only (6-way), fully raw
+coordinates (no PCA rotation, no X-mirror, no Y-flip - see coords_comp2.py's docstring) -
+isolates "what happens if we skip every geometric coordinate transform entirely," as opposed to
+CHAI (main_chai.py) which only isolates the X-mirror step.
 
 REDEFINED 2026-08-31: previously this file (then producing csv_comp2/) built the SAME
-coordinates Comp3 uses (Y-flip kept, X-mirror dropped, pooled). That definition is now
-Comp3-only (renamed to main_comp3.py / coords_comp3.py / csv_comp3/) - Comp2 moved to fully-raw
+coordinates CHAI uses (Y-flip kept, X-mirror dropped, pooled). That definition is now
+CHAI-only (renamed to main_chai.py / coords_chai.py / csv_chai/) - Comp2 moved to fully-raw
 coordinates instead. Since there's no Y-flip left to align upper/lower jaw coordinate ranges, this
-still writes ONE combined CSV per split (with a `jaw` column, like csv_baseline/) but
+still writes ONE combined CSV per split (with a `jaw` column, like csv_mirrored/) but
 ResNet/tooth/train_comp2.py filters by jaw and trains lower/upper as two separate models - keeping
 one CSV (filtered at train time) avoids duplicating this whole extraction script per jaw.
 
 Still uses PCA for compute_arch_order's row ordering only (same as every other main_*.py here -
 verified robust to a missing tooth, see project notes) - never for the coordinates themselves.
 
-main_baseline.py/main_comp3.py and their outputs are left completely alone - this writes to
+main_mirrored.py/main_chai.py and their outputs are left completely alone - this writes to
 ResNet/tooth/csv_comp2/ instead.
 
 Usage:

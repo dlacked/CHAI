@@ -40,7 +40,7 @@ def build_split(jaw, split, dataset_dir, csv_dir):
 
     # main_comp2.py writes ALL of one jaw's rows (each image-by-image, arch-ordered left to
     # right) before starting the other jaw's, so filtering by jaw here still leaves each image's
-    # rows contiguous and in Held-Karp arch order - same grouping assumption as before.
+    # rows contiguous and in (X-sort) arch order - same grouping assumption as before.
     groups = OrderedDict()
     with open(csv_path, "r", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -82,15 +82,15 @@ def build_split(jaw, split, dataset_dir, csv_dir):
 
 def main():
     dataset_dir_default = PROJECT_ROOT.parent / "dataset"
-    # csv_comp3 (functions/features/main_comp3.py): no PCA rotation, no X-mirror, Y-flip kept -
-    # deliberately NOT csv_baseline, whose X-mirror folds one side of the arch onto the other
+    # csv_chai (functions/features/main_chai.py): no PCA rotation, no X-mirror, Y-flip kept -
+    # deliberately NOT csv_mirrored, whose X-mirror folds one side of the arch onto the other
     # (good for the 6-way ResNet digit classifier, but destroys the whole-arch left-right shape
     # Arch Complexity actually needs to see) and NOT the old archived per-jaw PCA-rotated CSVs
     # (PCA axis swings ~13deg on a single missing tooth - actively harmful for a model whose
     # whole point is judging complexity in exactly the arches most likely to have one). NOTE:
     # csv_comp2 is NOT this - as of 2026-08-31 Comp2 means fully-raw (no Y-flip either) coords,
     # a different scheme than what Arch Complexity needs (see coords_comp2.py's docstring).
-    csv_dir_default = PROJECT_ROOT / "ResNet" / "tooth" / "csv_comp3"
+    csv_dir_default = PROJECT_ROOT / "ResNet" / "tooth" / "csv_chai"
     cache_dir_default = COMPLEXITY_DIR / "cache"
 
     parser = argparse.ArgumentParser(description="Build offline arch-geometry cache (no theta, no PCA, no X-mirror) for the Arch Complexity Transformer.")

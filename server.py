@@ -74,27 +74,32 @@ for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
     else:
         print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
-# Pooled tooth model (one model for both jaws, no PCA rotation, no theta - see
-# functions/features/coords_baseline.py / ResNet/tooth/train_baseline.py) - what /tooth_predict
-# actually uses now. tooth_models above is left loaded (unused by that route) so reverting to the
-# separate-per-jaw models is a one-line change if this doesn't pan out.
-BASELINE_MODEL_PATH = ROOT / "ResNet" / "tooth" / "model_baseline" / "best.pth"
-RESNET_TOOTH_TRAIN_BASELINE_PATH = ROOT / "ResNet" / "tooth" / "train_baseline.py"
-_resnet_tooth_train_baseline_spec = importlib.util.spec_from_file_location(
-    "resnet_tooth_train_baseline", str(RESNET_TOOTH_TRAIN_BASELINE_PATH))
-_resnet_tooth_train_baseline_module = importlib.util.module_from_spec(_resnet_tooth_train_baseline_spec)
-_resnet_tooth_train_baseline_spec.loader.exec_module(_resnet_tooth_train_baseline_module)
-ToothPositionClassifierNoTheta = _resnet_tooth_train_baseline_module.ToothPositionClassifierNoTheta
+# CHAI (the official model - pooled, unmirrored, unified 12-way local-quadrant x last-digit
+# classifier; see functions/features/coords_chai.py / ResNet/tooth/train_chai.py) - what
+# /tooth_predict actually serves now. tooth_models above is left loaded (unused by that route) so
+# reverting to the separate-per-jaw models is a one-line change if this doesn't pan out.
+CHAI_MODEL_PATH = ROOT / "ResNet" / "tooth" / "model_chai" / "best.pth"
+RESNET_TOOTH_TRAIN_CHAI_PATH = ROOT / "ResNet" / "tooth" / "train_chai.py"
+_resnet_tooth_train_chai_spec = importlib.util.spec_from_file_location(
+    "resnet_tooth_train_chai", str(RESNET_TOOTH_TRAIN_CHAI_PATH))
+_resnet_tooth_train_chai_module = importlib.util.module_from_spec(_resnet_tooth_train_chai_spec)
+_resnet_tooth_train_chai_spec.loader.exec_module(_resnet_tooth_train_chai_module)
+ToothPositionClassifierNoTheta = _resnet_tooth_train_chai_module.ToothPositionClassifierNoTheta
 
-baseline_tooth_model = None
-if BASELINE_MODEL_PATH.exists():
-    print(f"Loading baseline tooth model from {BASELINE_MODEL_PATH}...")
-    baseline_tooth_model = ToothPositionClassifierNoTheta(num_classes=6, pretrained=False)
-    baseline_tooth_model.load_state_dict(torch.load(BASELINE_MODEL_PATH, map_location=device))
-    baseline_tooth_model.to(device)
-    baseline_tooth_model.eval()
+# This jaw's two tens values, in local-index order (0, 1) - matches
+# functions/features/main_chai.py's JAW_TENS / the class12 scheme CHAI's classifier was trained
+# on (class12 = local_quadrant * 6 + (fdi_digit - 1)).
+JAW_TENS = {"upper": (1, 2), "lower": (3, 4)}
+
+chai_tooth_model = None
+if CHAI_MODEL_PATH.exists():
+    print(f"Loading CHAI tooth model from {CHAI_MODEL_PATH}...")
+    chai_tooth_model = ToothPositionClassifierNoTheta(num_classes=12, pretrained=False)
+    chai_tooth_model.load_state_dict(torch.load(CHAI_MODEL_PATH, map_location=device))
+    chai_tooth_model.to(device)
+    chai_tooth_model.eval()
 else:
-    print(f"Baseline tooth model weights not found: {BASELINE_MODEL_PATH}")
+    print(f"CHAI tooth model weights not found: {CHAI_MODEL_PATH}")
 
 # Load the arch-level Transformer that predicts an arch's overall complexity class (I/II/III)
 # from per-tooth geometry alone - no image or ResNet features involved (see
@@ -231,8 +236,7 @@ _postprocess_spec = importlib.util.spec_from_file_location(
 )
 _postprocess_module = importlib.util.module_from_spec(_postprocess_spec)
 _postprocess_spec.loader.exec_module(_postprocess_module)
-resolve_arch_duplicates = _postprocess_module.resolve_arch_duplicates
-correct_mirrors_by_digit_occurrence = _postprocess_module.correct_mirrors_by_digit_occurrence
+resolve_arch_chai = _postprocess_module.resolve_arch_chai
 
 
 @app.route('/health', methods=['GET'])
@@ -304,8 +308,8 @@ def tooth_predict():
     jaw = payload.get('jaw')
     teeth = payload.get('teeth')
 
-    if baseline_tooth_model is None:
-        return jsonify({'success': False, 'error': 'Pooled tooth model not available'}), 400
+    if chai_tooth_model is None:
+        return jsonify({'success': False, 'error': 'CHAI tooth model not available'}), 400
     if jaw not in ('upper', 'lower'):
         return jsonify({'success': False, 'error': f'Invalid jaw: {jaw}'}), 400
     if not teeth or not isinstance(teeth, list):
@@ -326,8 +330,11 @@ def tooth_predict():
             image = Image.open(io.BytesIO(crop_bytes)).convert('RGB')
             input_images.append(val_transform(image))
 
-            # No theta - the pooled model's meta_fc is 4-dim (see coords_baseline.py /
-            # train_baseline.py's ToothPositionClassifierNoTheta).
+            # No theta - CHAI's meta_fc is 4-dim (see coords_chai.py / train_chai.py's
+            # ToothPositionClassifierNoTheta). Coordinates must be unmirrored (js/geometry.js
+            # computeToothMetaComplexity, the same convention coords_chai.py uses), not the
+            # retired Mirrored Variant's X-mirrored ones - CHAI needs the raw quadrant signal to
+            # predict the tens digit at all.
             meta_vector = [
                 float(tooth.get('x1', 0.0)),
                 float(tooth.get('y1', 0.0)),
@@ -339,34 +346,32 @@ def tooth_predict():
         input_images = torch.stack(input_images).to(device)
         input_meta = torch.stack(input_meta).to(device)
 
-        model = baseline_tooth_model
         with torch.no_grad():
-            outputs = model(input_images, input_meta)
+            outputs = chai_tooth_model(input_images, input_meta)
 
         probs = outputs.cpu().numpy()
         # Teeth arrive already ordered left-to-right along the arch (js/api.js
-        # runToothAnalysis). Digits first, tens second - resolve the last digit arch-wide with NO
-        # quadrant/tens information at all (resolve_arch_duplicates: capacity-2 Hungarian over
-        # the whole arch, since a real arch has at most two teeth of any given digit regardless
-        # of quadrant detection), then read the tens boundary off wherever a digit repeats
-        # (correct_mirrors_by_digit_occurrence), falling back to the client's geometry-only
-        # `mirror` guess only for a digit that appears just once. Doing it the other way -
-        # grouping by the (occasionally wrong) geometric guess before resolving digits, like this
-        # endpoint used to - let a bad quadrant call corrupt an already-correct neighboring
-        # tooth's digit too; see ResNet/tooth/postprocess.py's docstrings for the full story.
-        initial_mirrors = [bool(tooth.get('mirror', False)) for tooth in teeth]
-        preds = resolve_arch_duplicates(probs)
-        corrected_mirrors = correct_mirrors_by_digit_occurrence(preds.tolist(), initial_mirrors)
-        confidences = probs[np.arange(len(preds)), preds]
+        # runToothAnalysis), though Hungarian itself is order-invariant. A single capacity-1
+        # Hungarian assignment over the unified 12-way (local-quadrant x last-digit) probabilities
+        # resolves the whole arch at once - see ResNet/tooth/postprocess.py's resolve_arch_chai
+        # and access.tex's Methods section for the cost-matrix formulation.
+        class12_preds = resolve_arch_chai(probs)
+        confidences = probs[np.arange(len(class12_preds)), class12_preds]
 
         predictions = []
         for i in range(len(teeth)):
+            class12 = int(class12_preds[i])
+            local_quadrant = class12 // 6
+            digit0 = class12 % 6
+            mirror = local_quadrant == 1
+            quadrant_probs = probs[i, local_quadrant * 6:local_quadrant * 6 + 6]
             predictions.append({
-                'probs': [float(p) for p in probs[i].tolist()],
-                'class_idx': int(preds[i]),
-                'predicted_last_digit': int(preds[i]) + 1,
+                'probs': [float(p) for p in quadrant_probs.tolist()],
+                'class_idx': digit0,
+                'predicted_last_digit': digit0 + 1,
+                'predicted_tens': JAW_TENS[jaw][local_quadrant],
                 'confidence': float(confidences[i]),
-                'mirror': bool(corrected_mirrors[i])
+                'mirror': mirror
             })
 
         return jsonify({'success': True, 'predictions': predictions})

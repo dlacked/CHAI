@@ -12,17 +12,17 @@ const isPipelineOn = () => pipelineOnRadio.checked;
 // Debug overlay radios: mutually exclusive with each other, and with the normal FDI-badge
 // view - see drawFdiNumbers/redrawCanvas in render.js. One radio per pre-ResNet pipeline stage
 // worth illustrating on its own (paper figures - see render.js's drawPcaJawOverlay/
-// drawHeldKarpOrder/drawMirroringOverlay/drawCropBoxesOverlay for what each draws).
+// drawArchOrder/drawMirroringOverlay/drawCropBoxesOverlay for what each draws).
 const vizOffRadio = document.getElementById('viz-off-radio');
 const vizSegmentationRadio = document.getElementById('viz-segmentation-radio');
 const vizPcaRadio = document.getElementById('viz-pca-radio');
-const vizHeldKarpRadio = document.getElementById('viz-heldkarp-radio');
+const vizArchOrderRadio = document.getElementById('viz-archorder-radio');
 const vizMirroringRadio = document.getElementById('viz-mirroring-radio');
 const vizCropRadio = document.getElementById('viz-crop-radio');
 const getVizMode = () => {
     if (vizSegmentationRadio.checked) return 'segmentation';
     if (vizPcaRadio.checked) return 'pca';
-    if (vizHeldKarpRadio.checked) return 'heldkarp';
+    if (vizArchOrderRadio.checked) return 'archorder';
     if (vizMirroringRadio.checked) return 'mirroring';
     if (vizCropRadio.checked) return 'crop';
     return 'off';

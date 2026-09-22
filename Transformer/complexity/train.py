@@ -7,11 +7,12 @@ enough given both are already near-ceiling). The old per-jaw training script (`t
 lower/upper`, PCA-rotated coordinates) and its outputs are retired to
 backups/superseded_20260831/Transformer_complexity_{train_perjaw.py,model_perjaw,runs_perjaw}/.
 
-Feasible at all because build_dataset.py's coordinate source (csv_comp3 - see that file's
-csv_dir_default comment) keeps Baseline's Y-flip, which aligns upper/lower jaw coordinate ranges
-into one shared convention - the same reason Baseline's tooth-digit ResNet classifier can be
-pooled (see functions/features/coords_baseline.py's docstring). Before that coordinate swap,
-lower/upper Complexity models had no shared coordinate convention and pooling wasn't meaningful.
+Feasible at all because build_dataset.py's coordinate source (csv_chai - see that file's
+csv_dir_default comment) keeps the Mirrored Variant's Y-flip, which aligns upper/lower jaw
+coordinate ranges into one shared convention - the same reason the Mirrored Variant's tooth-digit
+ResNet classifier can be pooled (see functions/features/coords_mirrored.py's docstring). Before
+that coordinate swap, lower/upper Complexity models had no shared coordinate convention and
+pooling wasn't meaningful.
 
 The model itself (ArchComplexityTransformer) needs no changes - it never took a jaw indicator as
 input, it's already jaw-agnostic; only the DATA needs combining.

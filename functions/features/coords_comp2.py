@@ -1,16 +1,17 @@
 def get_normalized_coords_comp2(poly, img_size):
     """
-    Comp2 (paper label; ablation of Baseline = coords_baseline.py, "CHAI (Ours)"): fully raw
-    coordinates - NO PCA rotation, NO X-mirror, NO Y-flip, nothing but a straight axis-aligned
-    bbox from the polygon's raw image-space points, normalized by image width/height. This
-    isolates "what does the model get if we skip every geometric transform entirely," as opposed
-    to Comp3 (coords_comp3.py - Y-flip kept, X-mirror dropped, still pooled) which only isolates
-    the X-mirror step alone.
+    Comp2 (paper label; ablation of the Mirrored Variant = coords_mirrored.py, formerly
+    "Baseline"/"CHAI (Ours)" before CHAI was redefined - see coords_chai.py, now the official
+    model): fully raw coordinates - NO PCA rotation, NO X-mirror, NO Y-flip, nothing but a
+    straight axis-aligned bbox from the polygon's raw image-space points, normalized by image
+    width/height. This isolates "what does the model get if we skip every geometric transform
+    entirely," as opposed to CHAI (coords_chai.py - Y-flip kept, X-mirror dropped, still pooled)
+    which only isolates the X-mirror step alone.
 
-    REDEFINED 2026-08-31 (was previously identical to what's now coords_comp3.py: Y-flip kept,
+    REDEFINED 2026-08-31 (was previously identical to what's now coords_chai.py: Y-flip kept,
     X-mirror dropped, pooled both-jaws). No jaw parameter needed any more - nothing branches on
     it, since there's no Y-flip left to decide. Because there's no transform left to align upper
-    and lower jaw coordinate ranges (that WAS the Y-flip's job - see coords_baseline.py's
+    and lower jaw coordinate ranges (that WAS the Y-flip's job - see coords_mirrored.py's
     docstring: upper/lower are shot with opposite vertical framing), Comp2 can no longer be a
     single pooled model - ResNet/tooth/train_comp2.py trains lower and upper as two fully
     separate models instead (same structure as Transformer/complexity's per-jaw training).
