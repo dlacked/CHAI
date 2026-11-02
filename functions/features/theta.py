@@ -29,41 +29,6 @@ def calculate_pca_rotation(centroids):
         angle += np.pi
     return mean, angle
 
-def get_theta_values(centroids, mean_pt=None, angle=None):
-    """
-    Given a list of centroids and a PCA (mean_pt, angle), projects each centroid into that
-    frame and returns rotated coordinates + angle for each. If mean_pt/angle aren't supplied,
-    computes them via calculate_pca_rotation() (the common case - pass them explicitly only if
-    the caller already computed the same PCA elsewhere and wants to avoid redoing it).
-    """
-    if not centroids:
-        return []
-
-    if mean_pt is None or angle is None:
-        mean_pt, angle = calculate_pca_rotation(centroids)
-    cos_a = np.cos(-angle)
-    sin_a = np.sin(-angle)
-    
-    results = []
-    for idx, c in enumerate(centroids):
-        rx = c[0] - mean_pt[0]
-        ry = c[1] - mean_pt[1]
-        
-        tx = rx * cos_a - ry * sin_a
-        ty = rx * sin_a + ry * cos_a
-        
-        angle_rad = np.arctan2(ty, tx)
-        
-        results.append({
-            "idx": idx,
-            "rotated_x": tx,
-            "rotated_y": ty,
-            "angle_rad": angle_rad,
-            "angle_norm": angle_rad / np.pi
-        })
-
-    return results
-
 def compute_arch_order(centroids, mean_pt, angle, is_upper):
     """
     Python port of js/geometry.js's computeArchOrder - orders teeth by their PCA-rotated x

@@ -2,7 +2,7 @@
 Evaluation for the Yoon et al. reproduction: runs the trained Cascade R-CNN end-to-end (it detects
 AND classifies each tooth's FDI number jointly, unlike Ghorbani's two-stage detect-then-classify
 pipeline - see comparison/ghorbani/evaluate.py for that one), matches predictions to CHAI's GT via
-IoU, and reuses functions/graph/tooth.py's arch-level metric functions so this model can be
+IoU, and reuses functions/eval_metrics.py's arch-level metric functions so this model can be
 dropped into the same {model_label: {group_key: metrics}} comparison dicts as CHAI and Ghorbani.
 
 No duplicate-resolution post-process here (unlike Ghorbani's Fig.1 half-jaw reassignment step) -
@@ -24,7 +24,11 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 YOON_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = YOON_DIR.parent.parent
+_bootstrap_root = YOON_DIR.parent.parent
+if str(_bootstrap_root) not in sys.path:
+    sys.path.append(str(_bootstrap_root))
+from config import PathConfig
+PROJECT_ROOT = PathConfig.ROOT
 DATASET_DIR = PROJECT_ROOT.parent / "dataset"
 RESULTS_DIR = YOON_DIR / "results"
 
@@ -213,7 +217,7 @@ def main():
     print(f"TP={tp}  FP={fp}  FN={fn}  spurious(no-GT-match)={totals['spurious']}")
     print(f"Sensitivity={sensitivity:.4f}  Precision={precision:.4f}  F1={f1:.4f}")
 
-    tooth_module = load_module("chai_tooth_graph_yoon", PROJECT_ROOT / "functions" / "graph" / "tooth.py")
+    tooth_module = load_module("chai_tooth_graph_yoon", PROJECT_ROOT / "functions" / "eval_metrics.py")
 
     print("\n" + "=" * 70)
     print("CHAI-style arch-level metrics (test set) - Yoon (Cascade R-CNN)")
@@ -235,7 +239,7 @@ def main():
               f"recall={m['recall']:.4f}  f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
 
     complexity_build = load_module(
-        "vit_complexity_build_eval_yoon", PROJECT_ROOT / "Transformer" / "complexity" / "build_dataset.py"
+        "vit_complexity_build_eval_yoon", PROJECT_ROOT / "functions" / "features" / "complexity_labels.py"
     )
     complexity_by_image = complexity_build.load_complexity_labels(DATASET_DIR, "test")
     arch_by_complexity = tooth_module.compute_arch_metrics_by_complexity(

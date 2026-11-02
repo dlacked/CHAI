@@ -33,13 +33,21 @@ const segmentImage = (file) => {
 
 // Crops a tooth's bounding box out of the full image (10px padding, matching the crop used to
 // build the ResNet Tooth model's training data - see ResNet/tooth/train.py ToothDataset) and
-// returns it as a base64 PNG data URL for the /tooth_predict request
+// returns it as a base64 PNG data URL for the /tooth_predict request. All four edges use
+// Math.floor (not Math.ceil on x2/y2) to match ResNet/tooth/evaluate_chai.py's exact
+// int(max(0, x_min-pad)) / int(min(w, x_max+pad)) convention - Python's int() truncates toward
+// zero, which for these already-non-negative values is identical to floor, not ceil. Using ceil
+// on the upper bound here used to widen the crop by up to 1px on two edges versus the offline
+// evaluation, the same kind of sub-pixel crop-boundary mismatch that previously shifted a
+// handful of arches' predictions when fast_dataset.py's cache used float-coordinate cropping
+// (see that file's docstring) - this live tool must match evaluate_chai.py exactly, not just
+// approximately, since its output is used for the paper's own qualitative comparison figure.
 const cropToothImage = (image, box, padding = 10) => {
     const [x1, y1, x2, y2] = box;
     const cx1 = Math.max(0, Math.floor(x1 - padding));
     const cy1 = Math.max(0, Math.floor(y1 - padding));
-    const cx2 = Math.min(image.width, Math.ceil(x2 + padding));
-    const cy2 = Math.min(image.height, Math.ceil(y2 + padding));
+    const cx2 = Math.min(image.width, Math.floor(x2 + padding));
+    const cy2 = Math.min(image.height, Math.floor(y2 + padding));
     const w = Math.max(1, cx2 - cx1);
     const h = Math.max(1, cy2 - cy1);
 
@@ -188,6 +196,12 @@ const runExternalModelAnalysis = (file, label, endpoint, cache) => {
 
     const formData = new FormData();
     formData.append('image', file);
+    // Lets the server look up this image's AIHub ground truth and score predictions with the
+    // exact same best-IoU matching evaluate.py uses for the paper's own numbers (server.py's
+    // lookup_gt_teeth_for_matching infers jaw from the upper_/lower_ filename prefix, same
+    // convention as runGroundTruthLookup below) - harmless no-op for a non-dataset upload, where
+    // the server just finds no GT and predictions come back without a 'correct' field.
+    formData.append('image_name', file.name);
 
     fetch(endpoint, { method: 'POST', body: formData })
         .then(response => response.json())
@@ -202,6 +216,61 @@ const runExternalModelAnalysis = (file, label, endpoint, cache) => {
         })
         .catch(error => {
             cache[file.name] = { status: 'error', error: String(error) };
+            console.error('Server offline or network error:', error);
+            redrawCanvas();
+        });
+};
+
+// GT-conditioned counterpart to runToothAnalysis: used instead of it whenever this file is a
+// known AIHub test-set image (groundTruthCache has it), so CHAI's own row matches
+// ResNet/tooth/evaluate_chai.py's exact convention - crop/classify each ground-truth tooth
+// directly (no live YOLO-seg detection, no live parabola-fit jaw guess, since both are already
+// known from the dataset label) - the same convention /ghorbani_predict and /yoon_predict now
+// follow too (see server.py's lookup_gt_teeth_for_matching). Reuses cropToothImage and
+// computeToothMetaComplexity unchanged (both already match evaluate_chai.py bit-for-bit; see
+// their own docstrings), just feeding them a GT box instead of a live detection's. Every GT
+// tooth's own true fdi_number is already known here, so correctness is immediate - no nearest-
+// centroid or best-IoU matching needed, unlike the external-model endpoints.
+const runToothAnalysisGT = (file, jaw, gtTeeth) => {
+    const existing = chaiGtAnalysisCache[file.name];
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        redrawCanvas();
+        return;
+    }
+
+    chaiGtAnalysisCache[file.name] = { status: 'loading' };
+    redrawCanvas();
+
+    const isUpper = jaw === 'upper';
+    const teeth = gtTeeth.map(t => {
+        const fakePred = { polygon: [[t.box[0], t.box[1]], [t.box[2], t.box[1]], [t.box[2], t.box[3]], [t.box[0], t.box[3]]] };
+        const meta = computeToothMetaComplexity(fakePred, isUpper);
+        return { crop: cropToothImage(currentImage, t.box), x1: meta.x1, y1: meta.y1, x2: meta.x2, y2: meta.y2 };
+    });
+
+    fetch('/tooth_predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jaw, teeth }),
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const results = gtTeeth.map((t, i) => {
+                    const p = data.predictions[i];
+                    const predictedFdi = p.predicted_tens * 10 + p.predicted_last_digit;
+                    return { box: t.box, true_fdi: t.fdi_number, predicted_fdi: predictedFdi,
+                             correct: predictedFdi === t.fdi_number };
+                });
+                chaiGtAnalysisCache[file.name] = { status: 'done', results };
+            } else {
+                chaiGtAnalysisCache[file.name] = { status: 'error', error: data.error };
+                console.error('CHAI GT-conditioned analysis error:', data.error);
+            }
+            redrawCanvas();
+        })
+        .catch(error => {
+            chaiGtAnalysisCache[file.name] = { status: 'error', error: String(error) };
             console.error('Server offline or network error:', error);
             redrawCanvas();
         });

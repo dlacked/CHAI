@@ -1,6 +1,6 @@
 """
 Stage 2 of the Ghorbani et al. reproduction: an on-the-fly-cropped YOLOv8n-cls tooth classifier,
-trained directly against CHAI's GT JSON + images - mirroring ResNet/tooth/train.py's ToothDataset
+trained directly against CHAI's GT JSON + images - mirroring ResNet/train.py's ToothDataset
 (crop happens in __getitem__, nothing is ever written to disk) instead of pre-cropping ~1M small
 files to disk, which would have meaningfully dented the ~57GB free on this machine for no real
 benefit over cropping in-memory like CHAI's own ResNet already does.
@@ -12,7 +12,7 @@ jaw-segregated at the model level).
 
 Trains ultralytics' actual YOLOv8n-cls architecture (via ClassificationModel + ImageNet-pretrained
 backbone, not the high-level ultralytics Trainer, which only accepts a folder-based dataset) with
-a plain PyTorch loop - matching ResNet/tooth/train.py's own manual-loop pattern rather than
+a plain PyTorch loop - matching ResNet/train.py's own manual-loop pattern rather than
 ultralytics' CLI trainer, since that's the only way to keep the on-the-fly crop and skip disk
 writes entirely.
 
@@ -24,6 +24,7 @@ Usage:
 """
 import json
 import random
+import sys
 from pathlib import Path
 
 import cv2
@@ -40,13 +41,17 @@ from ultralytics import YOLO
 from ultralytics.nn.tasks import ClassificationModel
 
 GHORBANI_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = GHORBANI_DIR.parent.parent
+_bootstrap_root = GHORBANI_DIR.parent.parent
+if str(_bootstrap_root) not in sys.path:
+    sys.path.append(str(_bootstrap_root))
+from config import PathConfig
+PROJECT_ROOT = PathConfig.ROOT
 DATASET_DIR = PROJECT_ROOT.parent / "dataset"
 MODEL_DIR = GHORBANI_DIR / "model"
 RUNS_DIR = GHORBANI_DIR / "runs"
 
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG", ".webp"]
-CROP_PAD = 10  # matches ResNet/tooth/train.py's ToothDataset crop padding
+CROP_PAD = 10  # matches ResNet/train.py's ToothDataset crop padding
 IMG_SIZE = 128  # per Ghorbani et al.'s stated Stage 2 input size
 
 # Full two-digit FDI numbers this dataset actually has GT for (digits 1-6 only, both jaws pooled -
@@ -66,7 +71,7 @@ def poly_bbox(seg):
 class GhorbaniToothDataset(Dataset):
     """Indexes every (jaw, image, tooth) triple from the GT JSON at init time (cheap - just
     metadata), then crops the actual pixels lazily per __getitem__ call, exactly like
-    ResNet/tooth/train.py's ToothDataset - nothing gets written to disk.
+    ResNet/train.py's ToothDataset - nothing gets written to disk.
 
     Items are grouped by source image (each image contributes ~10-12 teeth) and reshuffle()
     shuffles at that group level rather than per-tooth, so __getitem__ calls (with
@@ -220,8 +225,16 @@ def main():
 
     # No horizontal flip - unlike generic image classification, flipping a tooth crop changes
     # which side of the midline it visually resembles, which would corrupt the FDI-number label.
+    # zoom+crop (added 2026-09-23, was previously missing - the paper's stated Stage 2
+    # augmentation list is "horizontal flip, zoom, crop, photometric distortion, and contrast
+    # adjustment"): RandomResizedCrop(scale=(0.8,1.0)) crops a random 80-100% region of the
+    # already-padded tooth crop and resizes back to IMG_SIZE, which is the standard torchvision
+    # way to combine "zoom" (the resize back up) and "crop" (the random sub-region) in one
+    # transform - the scale range is kept mild (never crops below 80%) so it cannot crop the
+    # tooth itself out of frame, since ResNet/train_chai.py's pad=10 convention this
+    # reproduction's own crop_and_classify follows already leaves only a small margin.
     train_transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.RandomResizedCrop(IMG_SIZE, scale=(0.8, 1.0), ratio=(0.9, 1.1)),
         transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),

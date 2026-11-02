@@ -1,8 +1,8 @@
 """
 CSV builder for CHAI (the official model, formerly internally called "Comp3"): up-to-tens-digit
 (12-way: this jaw's 2 quadrants x 6 digits), classified jointly and resolved arch-wide via a
-standard (capacity-1) Hungarian assignment downstream (see ResNet/tooth/train_chai.py and
-functions/graph/tooth.py). The `fdi_last_digit` column below is vestigial (CHAI only reads
+standard (capacity-1) Hungarian assignment downstream (see ResNet/train_chai.py and
+functions/eval_metrics.py). The `fdi_last_digit` column below is vestigial (CHAI only reads
 class12) - kept rather than removed, harmless either way.
 
 Uses coords_chai.py (Y-flip kept, no X-mirror - see that module's docstring for why CHAI needs
@@ -10,8 +10,8 @@ un-mirrored coordinates), combined-jaws pooling, and the same PCA-for-arch-order
 the retired Mirrored Variant (main_mirrored.py) - note ordering itself is no longer used
 downstream by CHAI's own pipeline, only jaw classification is.
 
-main_mirrored.py and its outputs (ResNet/tooth/csv_mirrored/) are left completely alone - this
-writes to ResNet/tooth/csv_chai/ instead.
+main_mirrored.py and its outputs (ResNet/csv_mirrored/) are left completely alone - this
+writes to ResNet/csv/ instead.
 
 Usage:
     .venv/Scripts/python.exe functions/features/main_chai.py [--force]
@@ -146,9 +146,13 @@ def process_jaw(jaw, split, dataset_dir, results_data):
 
 
 def main():
-    project_root = Path(__file__).resolve().parent.parent.parent
+    _bootstrap_root = Path(__file__).resolve().parent.parent.parent
+    if str(_bootstrap_root) not in sys.path:
+        sys.path.append(str(_bootstrap_root))
+    from config import PathConfig
+    project_root = PathConfig.ROOT
     dataset_dir = project_root.parent / "dataset"
-    output_dir = project_root / "ResNet" / "tooth" / "csv_chai"
+    output_dir = project_root / "ResNet" / "csv"
 
     parser = argparse.ArgumentParser(
         description="Extract coordinates with no PCA rotation and no X-mirror (Y-flip kept), "

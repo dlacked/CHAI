@@ -5,7 +5,7 @@ plain YOLOv8 detection bbox labels (`class cx cy w h`, normalized, class-agnosti
 YOLO/data.yaml already trains a class-agnostic YOLOv8n-SEG model from a pre-existing polygon
 label set (dataset/{split}/labels/{jaw}/*.txt) - this script targets the same GT and the same
 single "tooth" class, but derives a tight axis-aligned bounding box (min/max of each tooth's
-segmentation polygon, matching ResNet/tooth/train.py's crop convention minus its 10px padding -
+segmentation polygon, matching ResNet/train.py's crop convention minus its 10px padding -
 detection GT should reflect the tooth's real extent, not a crop margin) rather than a polygon,
 since Ghorbani's Stage 1 is a plain detector (YOLOv8n), not a segmenter.
 
@@ -22,13 +22,18 @@ Usage:
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 GHORBANI_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = GHORBANI_DIR.parent.parent           # .../CHAI/CHAI
+_bootstrap_root = GHORBANI_DIR.parent.parent        # .../CHAI/CHAI
+if str(_bootstrap_root) not in sys.path:
+    sys.path.append(str(_bootstrap_root))
+from config import PathConfig
+PROJECT_ROOT = PathConfig.ROOT                      # .../CHAI/CHAI
 DATASET_DIR = PROJECT_ROOT.parent / "dataset"       # .../CHAI/dataset
 OUT_DIR = GHORBANI_DIR / "detect_dataset"
 

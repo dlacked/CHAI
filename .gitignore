@@ -14,3 +14,12 @@ comparison/ghorbani/detect_dataset/
 comparison/yoon/coco_dataset/
 comparison/*/runs/
 backups/
+
+# Same reasoning for CHAI's own regenerable derived data: the precrop JPEG cache
+# (ResNet/cropped_tooth/) alone is ~840,000 files, rebuilt on demand by
+# fast_dataset.py's callers; training-run logs/plots under runs_<variant>/ and the YOLO
+# validation-run output at the repo root (runs/) are also pure regenerable artifacts.
+# (ResNet/runs/ itself is NOT ignored - metrics_history.png there is tracked.)
+ResNet/cropped_tooth/
+ResNet/runs_*/
+/runs/

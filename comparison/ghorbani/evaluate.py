@@ -8,7 +8,7 @@ based on their position and assigned new numbers as needed". Modeled here as: sp
 image's detections into two geometric halves (left/right of that image's own tooth-cluster
 x-midline - a stand-in for "half of the jaw"), infer which quadrant each half is via majority
 vote of the classifier's own top-1 predictions, then resolve any repeated last-digit within a
-half using ResNet/tooth/postprocess.py's resolve_quadrant_greedy: confidence-sorted-descending,
+half using ResNet/postprocess.py's resolve_quadrant_greedy: confidence-sorted-descending,
 each tooth claims its highest-ranked still-available digit. That function already exists as one
 of CHAI's own three duplicate-resolution comparison points and matches the paper's description
 (confidence-first claim, fallback to next-best available number) closely enough to reuse as-is
@@ -18,7 +18,7 @@ Two sets of metrics are reported:
   1. Ghorbani's own Table 1 definition - TP/FP/FN via IoU>=0.5 matching between a detection and
      its nearest GT box (TP = detected + correctly numbered, FP = detected + wrong number,
      FN = GT tooth with no matching detection) -> Sensitivity/Precision/F1.
-  2. CHAI's arch-level metrics (functions/graph/tooth.py's compute_missing_teeth_metrics /
+  2. CHAI's arch-level metrics (functions/eval_metrics.py's compute_missing_teeth_metrics /
      compute_missing_vs_complete_metrics / compute_arch_metrics_by_complexity) run on a per_jaw
      dict built in the exact same shape CHAI's own evaluate_tooth_number produces - one entry per
      REAL GT tooth (a missed GT tooth gets a guaranteed-wrong sentinel prediction so it still
@@ -48,7 +48,7 @@ from train_classify import (
 )
 
 import sys
-sys.path.insert(0, str(PROJECT_ROOT / "ResNet" / "tooth"))
+sys.path.insert(0, str(PROJECT_ROOT / "ResNet"))
 from postprocess import resolve_quadrant_greedy  # noqa: E402
 
 import importlib.util
@@ -336,9 +336,9 @@ def main():
 
     # Reuse CHAI's own arch-level metric functions on this per_jaw (built above in the exact
     # {jaw: {y_true, y_fdi_number, y_image_name, <pred_key>, <tens_pred_key>, <prob_field>}}
-    # shape functions/graph/tooth.py's evaluate_tooth_number produces, so no metric logic is
+    # shape functions/eval_metrics.py's evaluate_tooth_number produces, so no metric logic is
     # duplicated - just point pred_key/tens_pred_key/prob_field at this module's own field names.
-    tooth_module = load_module("chai_tooth_graph", PROJECT_ROOT / "functions" / "graph" / "tooth.py")
+    tooth_module = load_module("chai_tooth_graph", PROJECT_ROOT / "functions" / "eval_metrics.py")
 
     print("\n" + "=" * 70)
     print("CHAI-style arch-level metrics (test set) - Ghorbani (YOLOv8n detect+cls)")
@@ -360,7 +360,7 @@ def main():
               f"recall={m['recall']:.4f}  f1={m['f1']:.4f}  acc={m['accuracy']:.4f}  auc={m['auc']:.4f}")
 
     complexity_build = load_module(
-        "vit_complexity_build_eval_ghorbani", PROJECT_ROOT / "Transformer" / "complexity" / "build_dataset.py"
+        "vit_complexity_build_eval_ghorbani", PROJECT_ROOT / "functions" / "features" / "complexity_labels.py"
     )
     complexity_by_image = complexity_build.load_complexity_labels(DATASET_DIR, "test")
     arch_by_complexity = tooth_module.compute_arch_metrics_by_complexity(

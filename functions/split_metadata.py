@@ -2,9 +2,14 @@
 files, matched against the images already present under train/val/test/images/<jaw>/.
 """
 import json
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_bootstrap_root = Path(__file__).resolve().parent.parent
+if str(_bootstrap_root) not in sys.path:
+    sys.path.append(str(_bootstrap_root))
+from config import PathConfig
+PROJECT_ROOT = PathConfig.ROOT
 DATASET_DIR = PROJECT_ROOT.parent / "dataset"
 SPLITS = ("train", "val", "test")
 JAWS = ("lower", "upper")

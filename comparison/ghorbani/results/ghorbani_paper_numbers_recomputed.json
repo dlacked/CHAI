@@ -1,0 +1,61 @@
+{
+  "full": {
+    "n": 7152,
+    "proposed_acc": 0.9976230425055929,
+    "ghorbani_acc": 0.9437919463087249,
+    "mcnemar": {
+      "a_only": 395,
+      "b_only": 10,
+      "p": 7.262906752583653e-103
+    }
+  },
+  "missing": {
+    "n": 1073,
+    "proposed_acc": 0.9934762348555451,
+    "ghorbani_acc": 0.6999068033550793,
+    "mcnemar": {
+      "a_only": 315,
+      "b_only": 0,
+      "p": 2.996272867003007e-95
+    }
+  },
+  "class23": {
+    "n": 5224,
+    "proposed_acc": 0.9980857580398163,
+    "ghorbani_acc": 0.9592266462480857,
+    "mcnemar": {
+      "a_only": 213,
+      "b_only": 10,
+      "p": 1.0626570551439891e-50
+    }
+  },
+  "s5_missing_tooth_recognition": {
+    "proposed": {
+      "precision": 0.9993749441914457,
+      "recall": 0.9993749441914457,
+      "f1": 0.9993749441914457,
+      "slot_accuracy": 0.9989127058092575,
+      "arch_exact_match": 0.9934762348555451,
+      "n_arches": 1073,
+      "n_slots": 12876
+    },
+    "ghorbani": {
+      "precision": 0.9713367264934369,
+      "recall": 0.9713367264934369,
+      "f1": 0.9713367264934369,
+      "slot_accuracy": 0.9501397949673812,
+      "arch_exact_match": 0.700838769804287,
+      "n_arches": 1073,
+      "n_slots": 12876
+    },
+    "yoon": {
+      "precision": 0.970924740212029,
+      "recall": 0.8259666041610858,
+      "f1": 0.8925986683392839,
+      "slot_accuracy": 0.8271202236719478,
+      "arch_exact_match": 0.2739981360671016,
+      "n_arches": 1073,
+      "n_slots": 12876
+    }
+  }
+}

@@ -11,8 +11,8 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Load config path if needed, or define locally for simplicity
-ROOT = Path(__file__).resolve().parent
+from config import PathConfig
+ROOT = PathConfig.ROOT
 DATASET_DIR = ROOT.parent / "dataset"
 
 # Skips loading the comparison-paper reproductions (Ghorbani's YOLO detect+classify, Yoon's
@@ -40,16 +40,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load tooth classifier model(s)
-TOOTH_MODEL_DIR = ROOT / "ResNet" / "tooth" / "model"
+TOOTH_MODEL_DIR = ROOT / "ResNet" / "model"
 TOOTH_MODEL_PATHS = {
     "lower": TOOTH_MODEL_DIR / "lower_best.pth",
     "upper": TOOTH_MODEL_DIR / "upper_best.pth"
 }
 
-# Load ToothPositionClassifier from ResNet/tooth/train.py itself (single source of truth,
+# Load ToothPositionClassifier from ResNet/train.py itself (single source of truth,
 # same dynamic-import approach used for the Transformer models below) instead of keeping a
 # hand-copied second definition here that could silently drift out of sync with training.
-RESNET_TOOTH_TRAIN_PATH = ROOT / "ResNet" / "tooth" / "train.py"
+RESNET_TOOTH_TRAIN_PATH = ROOT / "ResNet" / "train.py"
 _resnet_tooth_train_spec = importlib.util.spec_from_file_location("resnet_tooth_train", str(RESNET_TOOTH_TRAIN_PATH))
 _resnet_tooth_train_module = importlib.util.module_from_spec(_resnet_tooth_train_spec)
 _resnet_tooth_train_spec.loader.exec_module(_resnet_tooth_train_module)
@@ -75,11 +75,11 @@ for jaw_name, model_path in TOOTH_MODEL_PATHS.items():
         print(f"Tooth model weights not found for {jaw_name}: {model_path}")
 
 # CHAI (the official model - pooled, unmirrored, unified 12-way local-quadrant x last-digit
-# classifier; see functions/features/coords_chai.py / ResNet/tooth/train_chai.py) - what
+# classifier; see functions/features/coords_chai.py / ResNet/train_chai.py) - what
 # /tooth_predict actually serves now. tooth_models above is left loaded (unused by that route) so
 # reverting to the separate-per-jaw models is a one-line change if this doesn't pan out.
-CHAI_MODEL_PATH = ROOT / "ResNet" / "tooth" / "model_chai" / "best.pth"
-RESNET_TOOTH_TRAIN_CHAI_PATH = ROOT / "ResNet" / "tooth" / "train_chai.py"
+CHAI_MODEL_PATH = ROOT / "ResNet" / "model" / "best.pth"
+RESNET_TOOTH_TRAIN_CHAI_PATH = ROOT / "ResNet" / "train_chai.py"
 _resnet_tooth_train_chai_spec = importlib.util.spec_from_file_location(
     "resnet_tooth_train_chai", str(RESNET_TOOTH_TRAIN_CHAI_PATH))
 _resnet_tooth_train_chai_module = importlib.util.module_from_spec(_resnet_tooth_train_chai_spec)
@@ -109,7 +109,7 @@ else:
 # longer selects a different model, just gets validated as a sane value in /complexity_predict.
 COMPLEXITY_MODEL_PATH = ROOT / "Transformer" / "complexity" / "model.py"
 COMPLEXITY_MODEL_WEIGHTS = ROOT / "Transformer" / "complexity" / "model" / "best.pth"
-COMPLEXITY_MAX_TEETH = 12  # matches Transformer/complexity/build_dataset.py's MAX_TEETH_PER_ARCH
+COMPLEXITY_MAX_TEETH = 12  # matches the 12 FDI slots (1-6) per side/jaw used everywhere else
 COMPLEXITY_GEOM_DIM = 4  # no-theta as of 2026-08-31 - see Transformer/complexity/train.py
 
 complexity_model = None
@@ -165,6 +165,7 @@ ghorbani_module = None
 ghorbani_detect_model = None
 ghorbani_classify_model = None
 ghorbani_eval_transform = None
+yoon_module = None
 yoon_model = None
 yoon_inference_detector = None
 # Class index -> FDI number for Yoon's detector output; Ghorbani's own FDI_CLASSES (identically
@@ -205,10 +206,10 @@ else:
         from mmdet.apis import init_detector as _yoon_init_detector, inference_detector as _yoon_inference_detector
         sys.path.insert(0, str(YOON_DIR))
         _yoon_spec = importlib.util.spec_from_file_location("yoon_evaluate", str(YOON_DIR / "evaluate.py"))
-        _yoon_evaluate_module = importlib.util.module_from_spec(_yoon_spec)
-        _yoon_spec.loader.exec_module(_yoon_evaluate_module)
+        yoon_module = importlib.util.module_from_spec(_yoon_spec)
+        _yoon_spec.loader.exec_module(yoon_module)
 
-        yoon_checkpoint = _yoon_evaluate_module.find_checkpoint(None)
+        yoon_checkpoint = yoon_module.find_checkpoint(None)
         yoon_model = _yoon_init_detector(str(YOON_DIR / "config.py"), yoon_checkpoint, device=str(device))
         yoon_inference_detector = _yoon_inference_detector
         print(f"Yoon reproduction model loaded from {yoon_checkpoint}.")
@@ -220,7 +221,7 @@ else:
         yoon_model = None
 
 
-# Preprocessing transforms (must match ResNet/tooth/train.py validation transforms)
+# Preprocessing transforms (must match ResNet/train.py validation transforms)
 val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -228,11 +229,11 @@ val_transform = transforms.Compose([
 ])
 
 
-# Shared with functions/graph/tooth.py's held-out evaluation (see that module's use of the same
-# function, and ResNet/tooth/postprocess.py's docstring for why this replaced the old
+# Shared with functions/eval_metrics.py's held-out evaluation (see that module's use of the same
+# function, and ResNet/postprocess.py's docstring for why this replaced the old
 # arch-refinement Transformer, now retired to backups/superseded_20260831/ViT_arch/).
 _postprocess_spec = importlib.util.spec_from_file_location(
-    "resnet_tooth_postprocess", str(ROOT / "ResNet" / "tooth" / "postprocess.py")
+    "resnet_tooth_postprocess", str(ROOT / "ResNet" / "postprocess.py")
 )
 _postprocess_module = importlib.util.module_from_spec(_postprocess_spec)
 _postprocess_spec.loader.exec_module(_postprocess_module)
@@ -299,6 +300,23 @@ def segment():
         print(f"Error during segmentation: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# Looks up this (jaw, image_name)'s ground-truth teeth (fdi_number + box, same convention as
+# ghorbani_module/yoon_module's own load_gt_teeth) for a test-set image, so /ghorbani_predict and
+# /yoon_predict can score their live detections the EXACT same way evaluate.py scores the offline
+# per_jaw.pkl the paper's own numbers come from: best-IoU Hungarian matching
+# (match_detections_to_gt), not js/render.js's own nearest-centroid matchGroundTruth fallback.
+# Without this, a live demo screenshot (e.g. for the paper's qualitative comparison figure) can
+# show different correct/incorrect coloring than the actual reported metrics - the two matching
+# conventions can disagree whenever a spurious or near-miss detection is involved.
+def lookup_gt_teeth_for_matching(image_name, split='test'):
+    jaw = 'upper' if image_name.startswith('upper_') else 'lower'
+    stem = Path(image_name).stem
+    json_path = DATASET_DIR / split / "labels_json" / jaw / f"{stem}.json"
+    if not json_path.exists():
+        return None, None
+    return jaw, json_path
+
+
 @app.route('/tooth_predict', methods=['POST'])
 def tooth_predict():
     payload = request.get_json(silent=True)
@@ -353,7 +371,7 @@ def tooth_predict():
         # Teeth arrive already ordered left-to-right along the arch (js/api.js
         # runToothAnalysis), though Hungarian itself is order-invariant. A single capacity-1
         # Hungarian assignment over the unified 12-way (local-quadrant x last-digit) probabilities
-        # resolves the whole arch at once - see ResNet/tooth/postprocess.py's resolve_arch_chai
+        # resolves the whole arch at once - see ResNet/postprocess.py's resolve_arch_chai
         # and access.tex's Methods section for the cost-matrix formulation.
         class12_preds = resolve_arch_chai(probs)
         confidences = probs[np.arange(len(class12_preds)), class12_preds]
@@ -453,25 +471,49 @@ def ghorbani_predict():
             image, det_boxes, ghorbani_classify_model, device, ghorbani_eval_transform
         )
 
-        # A live single-image request has no folder-derived jaw label the way evaluate.py's
-        # offline test-set run does - infer it from a majority vote of the detections' own raw
-        # top-1 quadrant, same spirit as resolve_duplicates_for_image's own per-half fallback.
-        quadrant_of_class = np.array([c // 10 for c in ghorbani_module.FDI_CLASSES])
-        top1_quadrant = quadrant_of_class[det_probs.argmax(axis=1)]
-        upper_votes = int(np.isin(top1_quadrant, (1, 2)).sum())
-        lower_votes = int(np.isin(top1_quadrant, (3, 4)).sum())
-        jaw = 'upper' if upper_votes >= lower_votes else 'lower'
+        # If this upload is a known test-set image, use its GT-derived jaw (exactly like
+        # evaluate.py's offline run, which reads jaw off the folder path, not a guess) instead of
+        # the majority-vote fallback below - see lookup_gt_teeth_for_matching's docstring.
+        image_name = request.form.get('image_name')
+        gt_jaw, gt_json_path = (None, None) if not image_name else lookup_gt_teeth_for_matching(image_name)
+
+        if gt_jaw:
+            jaw = gt_jaw
+        else:
+            # No GT available (fresh upload) - infer jaw from a majority vote of the detections'
+            # own raw top-1 quadrant, same spirit as resolve_duplicates_for_image's own per-half
+            # fallback. Only a fallback now, not the primary path for dataset images.
+            quadrant_of_class = np.array([c // 10 for c in ghorbani_module.FDI_CLASSES])
+            top1_quadrant = quadrant_of_class[det_probs.argmax(axis=1)]
+            upper_votes = int(np.isin(top1_quadrant, (1, 2)).sum())
+            lower_votes = int(np.isin(top1_quadrant, (3, 4)).sum())
+            jaw = 'upper' if upper_votes >= lower_votes else 'lower'
 
         final_class = ghorbani_module.resolve_duplicates_for_image(det_boxes, det_probs, jaw)
 
+        # Best-IoU Hungarian matching against GT (same function evaluate.py uses for the paper's
+        # own numbers) when available, so 'correct' here means exactly what Table I-III report -
+        # js/render.js prefers this over its own nearest-centroid heuristic when present.
+        correct_by_det_idx = {}
+        if gt_json_path is not None:
+            gt_teeth = ghorbani_module.load_gt_teeth(gt_json_path)
+            gt_fdi = [t[0] for t in gt_teeth]
+            gt_boxes = [t[1] for t in gt_teeth]
+            matched, _, _ = ghorbani_module.match_detections_to_gt(det_boxes, gt_boxes)
+            for det_i, gt_i in matched:
+                correct_by_det_idx[det_i] = (int(final_class[det_i]) == gt_fdi[gt_i])
+
         predictions = []
-        for box, cls, probs_row in zip(det_boxes, final_class, det_probs):
+        for i, (box, cls, probs_row) in enumerate(zip(det_boxes, final_class, det_probs)):
             cls = int(cls)
-            predictions.append({
+            pred = {
                 'box': [float(v) for v in box],
                 'fdi_number': cls,
                 'confidence': float(probs_row[ghorbani_module.FDI_TO_IDX[cls]]),
-            })
+            }
+            if i in correct_by_det_idx:
+                pred['correct'] = correct_by_det_idx[i]
+            predictions.append(pred)
         return jsonify({'success': True, 'predictions': predictions, 'jaw': jaw})
     except Exception as e:
         print(f"Error during Ghorbani prediction: {str(e)}")
@@ -494,7 +536,7 @@ def yoon_predict():
 
         result = yoon_inference_detector(yoon_model, image)
         pred = result.pred_instances
-        keep = (pred.scores >= 0.25).cpu().numpy()
+        keep = (pred.scores >= yoon_module.CONF_THRESHOLD).cpu().numpy()
         det_boxes = pred.bboxes.cpu().numpy()[keep]
         det_scores = pred.scores.cpu().numpy()[keep]
         det_labels = pred.labels.cpu().numpy()[keep]
@@ -503,13 +545,32 @@ def yoon_predict():
         # for this model (unlike Ghorbani's Fig.1 half-jaw reassignment step), so its own top-1
         # class per detection is the faithful reproduction, not an omission - see
         # comparison/yoon/evaluate.py's module docstring for the full reasoning.
+        fdi_numbers = [int(YOON_FDI_CLASSES[int(label)]) for label in det_labels]
+
+        # Same best-IoU GT matching as /ghorbani_predict, reusing yoon_module's own
+        # match_detections_to_gt/load_gt_teeth so 'correct' here matches the paper's reported
+        # numbers exactly, instead of js/render.js's own nearest-centroid fallback.
+        image_name = request.form.get('image_name')
+        gt_jaw, gt_json_path = (None, None) if not image_name else lookup_gt_teeth_for_matching(image_name)
+        correct_by_det_idx = {}
+        if gt_json_path is not None and yoon_module is not None:
+            gt_teeth = yoon_module.load_gt_teeth(gt_json_path)
+            gt_fdi = [t[0] for t in gt_teeth]
+            gt_boxes = [t[1] for t in gt_teeth]
+            matched, _, _ = yoon_module.match_detections_to_gt(det_boxes.tolist(), gt_boxes)
+            for det_i, gt_i in matched:
+                correct_by_det_idx[det_i] = (fdi_numbers[det_i] == gt_fdi[gt_i])
+
         predictions = []
-        for box, score, label in zip(det_boxes, det_scores, det_labels):
-            predictions.append({
+        for i, (box, score, fdi_number) in enumerate(zip(det_boxes, det_scores, fdi_numbers)):
+            pred = {
                 'box': [float(v) for v in box],
-                'fdi_number': int(YOON_FDI_CLASSES[int(label)]),
+                'fdi_number': fdi_number,
                 'confidence': float(score),
-            })
+            }
+            if i in correct_by_det_idx:
+                pred['correct'] = correct_by_det_idx[i]
+            predictions.append(pred)
         return jsonify({'success': True, 'predictions': predictions})
     except Exception as e:
         print(f"Error during Yoon prediction: {str(e)}")
@@ -547,6 +608,13 @@ def ground_truth():
         with open(json_path, "r", encoding="utf-8") as f:
             data = _json.load(f)
 
+        # 'box' is the RAW (unpadded) polygon bounding box - deliberately not pre-padded here, so
+        # the frontend pads it itself via the same cropToothImage(image, box, 10) used for a live
+        # detection's own polygon bbox (js/api.js), and feeds the same raw box into
+        # computeToothMetaComplexity (js/geometry.js, which only ever reads a polygon's min/max
+        # anyway) for the meta-vector - one shared, already-verified code path for both the live
+        # and ground-truth-conditioned cases, instead of a second padding/normalization
+        # implementation here that could drift from evaluate_chai.py's convention over time.
         teeth = []
         for t in data.get("tooth", []):
             fdi_number = t.get("teeth_num")
@@ -555,7 +623,9 @@ def ground_truth():
                 continue
             poly = np.array(seg, dtype=np.float64)
             cx, cy = float(poly[:, 0].mean()), float(poly[:, 1].mean())
-            teeth.append({'fdi_number': int(fdi_number), 'cx': cx, 'cy': cy})
+            box = [float(poly[:, 0].min()), float(poly[:, 1].min()),
+                   float(poly[:, 0].max()), float(poly[:, 1].max())]
+            teeth.append({'fdi_number': int(fdi_number), 'cx': cx, 'cy': cy, 'box': box})
 
         return jsonify({'success': True, 'found': True, 'teeth': teeth})
     except Exception as e:

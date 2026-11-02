@@ -51,6 +51,10 @@ const toothAnalysisCache = {};
 const complexityCache = {};
 const ghorbaniAnalysisCache = {};
 const yoonAnalysisCache = {};
+// CHAI's own GT-conditioned predictions (js/api.js runToothAnalysisGT), separate from
+// toothAnalysisCache (the live-detection path) so switching between a dataset image and a fresh
+// upload never mixes the two conventions in one cache.
+const chaiGtAnalysisCache = {};
 // GT FDI numbers per test-set image (server.py's /ground_truth), used to color-code predicted
 // badges green/red (correct/incorrect) - see js/render.js's colorForFdiMatch.
 const groundTruthCache = {};

@@ -16,8 +16,21 @@ const CORRECTNESS_COLORS = {
 };
 
 const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#', fillColor = CORRECTNESS_COLORS.unknown) => {
-    const boxWidth = 180;
-    const boxHeight = 118;
+    ctx.font = 'bold 100px sans-serif';
+    const numWidth = ctx.measureText(numText).width;
+    ctx.font = 'bold 38px sans-serif';
+    const prefixWidth = prefix ? ctx.measureText(prefix).width : 0;
+
+    const spacing = prefix ? 5 : 0;
+    const totalWidth = prefixWidth + spacing + numWidth;
+    const startX = centerX - totalWidth / 2;
+
+    // Box sized to the text itself (tight padding) rather than a fixed size, so neighboring
+    // teeth's badges don't overlap as readily now that the number font is larger.
+    const padX = 22;
+    const padY = 14;
+    const boxWidth = totalWidth + padX * 2;
+    const boxHeight = 100 + padY * 2;
     const rx = centerX - boxWidth / 2;
     const ry = centerY - boxHeight / 2;
 
@@ -33,15 +46,6 @@ const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#', fillColor =
     ctx.lineWidth = 3.5;
     ctx.stroke();
 
-    ctx.font = 'bold 72px sans-serif';
-    const numWidth = ctx.measureText(numText).width;
-    ctx.font = 'bold 38px sans-serif';
-    const prefixWidth = prefix ? ctx.measureText(prefix).width : 0;
-
-    const spacing = prefix ? 5 : 0;
-    const totalWidth = prefixWidth + spacing + numWidth;
-    const startX = centerX - totalWidth / 2;
-
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     ctx.fillStyle = '#ffffff';
@@ -53,7 +57,7 @@ const drawFdiNumberBadge = (centerX, centerY, numText, prefix = '#', fillColor =
     }
 
     // Draw the number/notation in large font
-    ctx.font = 'bold 72px sans-serif';
+    ctx.font = 'bold 100px sans-serif';
     ctx.fillText(numText, startX + prefixWidth + spacing, centerY + 1);
 };
 
@@ -211,11 +215,11 @@ const drawPcaJawOverlay = (predictions, pca, jawResult) => {
     const centroids = predictions.map(pred => computeCentroid(pred.polygon));
     centroids.forEach(centroid => {
         ctx.beginPath();
-        ctx.arc(centroid.x, centroid.y, 9, 0, Math.PI * 2);
+        ctx.arc(centroid.x, centroid.y, 18, 0, Math.PI * 2);
         ctx.fillStyle = '#ffeb3b';
         ctx.fill();
         ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 5;
         ctx.stroke();
     });
 
@@ -234,7 +238,7 @@ const drawPcaJawOverlay = (predictions, pca, jawResult) => {
             if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = '#2196f3';
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 12;
         ctx.stroke();
     }
 
@@ -258,15 +262,17 @@ const drawPcaJawOverlay = (predictions, pca, jawResult) => {
 
     if (jawResult) {
         const text = `${jawResult.isUpper ? 'UPPER' : 'LOWER'}  (a = ${jawResult.a.toExponential(2)})`;
-        ctx.font = 'bold 34px sans-serif';
+        ctx.font = 'bold 100px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         const textWidth = ctx.measureText(text).width;
-        const textX = Math.min(Math.max(pca.center.x + 24, 10), currentImage.width - textWidth - 30);
-        const textY = Math.max(pca.center.y - 40, 40);
+        const margin = 40;
+        const labelH = 142;
+        const textX = margin;
+        const textY = currentImage.height - margin - labelH / 2;
 
         ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-        ctx.fillRect(textX - 12, textY - 26, textWidth + 24, 52);
+        ctx.fillRect(textX - 12, textY - labelH / 2, textWidth + 24, labelH);
         ctx.fillStyle = '#39ff14';
         ctx.fillText(text, textX, textY);
     }
@@ -320,7 +326,7 @@ const computeHoldingTens = (order, cached, predictions, isUpper) => {
         if (!row) return;
 
         if (typeof row.mirror === 'boolean') {
-            tensByVertexIdx[vertexIdx] = isUpper ? (row.mirror ? 2 : 1) : (row.mirror ? 3 : 4);
+            tensByVertexIdx[vertexIdx] = isUpper ? (row.mirror ? 2 : 1) : (row.mirror ? 4 : 3);
         } else {
             const centroid = computeCentroid(predictions[vertexIdx].polygon);
             tensByVertexIdx[vertexIdx] = computeQuadrantTens(centroid.x - currentImage.width / 2, isUpper);
@@ -457,14 +463,55 @@ const drawExternalModelBoxes = (predictions, modelKey, gtTeeth) => {
     const strokeStyle = EXTERNAL_MODEL_BOX_COLORS[modelKey] || 'rgba(255, 255, 255, 0.95)';
     predictions.forEach(p => {
         const [x1, y1, x2, y2] = p.box;
+        const centerX = (x1 + x2) / 2;
+        const centerY = (y1 + y2) / 2;
+
+        if (gtTeeth && typeof p.correct !== 'boolean') {
+            // GT exists for this image (server.py's /ghorbani_predict, /yoon_predict ran the
+            // same best-IoU match evaluate.py uses), but this specific detection didn't match
+            // any ground-truth tooth within IOU_MATCH_THRESHOLD - a "spurious" detection, exactly
+            // like Supplementary Table S6's spurious-detection count (e.g. two overlapping boxes
+            // for one physical tooth under per-class NMS, common for K. Yoon et al.). The paper's
+            // own convention excludes these from scoring entirely (no row in any confusion matrix
+            // or accuracy figure), so it is not drawn at all here either - not colored green/red
+            // via a fallback centroid guess (which would misrepresent it as scored).
+            return;
+        }
+
         ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+        // Prefer the server's own best-IoU-matched 'correct' flag (matches evaluate.py's scoring
+        // exactly) over this file's own nearest-centroid matchGroundTruth, used only when the
+        // server found no ground truth at all for this image (e.g. a non-dataset upload) - see
+        // lookup_gt_teeth_for_matching's docstring.
+        const status = typeof p.correct === 'boolean'
+            ? (p.correct ? 'correct' : 'incorrect')
+            : matchGroundTruth(p.fdi_number, centerX, centerY, gtTeeth);
+        drawFdiNumberBadge(centerX, centerY, String(p.fdi_number), '#', CORRECTNESS_COLORS[status]);
+    });
+};
+
+// CHAI's own GT-conditioned view (js/api.js runToothAnalysisGT): draws a box + colored FDI badge
+// at each ground-truth tooth's own (unpadded) location, matching Ghorbani/Yoon's
+// drawExternalModelBoxes styling so all three rows of the paper's qualitative comparison figure
+// look like one consistent family. Correctness is read directly off each result's own `correct`
+// flag (true_fdi is already known - no centroid/IoU matching needed, unlike the two external
+// models) and the badge shows CHAI's predicted_fdi, exactly like the other two models' badges
+// show their own prediction, not the ground truth.
+const drawChaiGtConditionedBoxes = (results) => {
+    if (!results || results.length === 0) return;
+    results.forEach(r => {
+        const [x1, y1, x2, y2] = r.box;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
         ctx.lineWidth = 3;
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
         const centerX = (x1 + x2) / 2;
         const centerY = (y1 + y2) / 2;
-        const status = matchGroundTruth(p.fdi_number, centerX, centerY, gtTeeth);
-        drawFdiNumberBadge(centerX, centerY, String(p.fdi_number), '#', CORRECTNESS_COLORS[status]);
+        const status = r.correct ? 'correct' : 'incorrect';
+        drawFdiNumberBadge(centerX, centerY, String(r.predicted_fdi), '#', CORRECTNESS_COLORS[status]);
     });
 };
 
@@ -544,7 +591,7 @@ const drawFdiNumbers = (predictions, pca, isUpper, hasClassification, file) => {
 // panel).
 const drawFullChaiView = (predictions, fdiByIndex, pca, jawResult, isUpper, hasClassification, file, vizMode) => {
     canvas.width = currentImage.width;
-    canvas.height = currentImage.height + BOTTOM_PANEL_HEIGHT;
+    canvas.height = currentImage.height;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(currentImage, 0, 0);
 
@@ -616,6 +663,43 @@ const redrawCanvas = () => {
         return;
     }
 
+    // GT-conditioned path: when this file is a known AIHub test/val/train image and no debug
+    // overlay is active, match ResNet/tooth/evaluate_chai.py's own convention exactly (ground-
+    // truth box + ground-truth jaw, no live YOLO-seg detection or parabola-fit jaw guess) instead
+    // of the live-detection path below - see js/api.js runToothAnalysisGT. A debug overlay
+    // (Segmentation / PCA & Jaw / Arch Order / Mirroring / Crop Boxes) still wants the live
+    // pipeline it's actually inspecting, so this only takes over the normal ('off') labeled view.
+    const vizModeForGt = getVizMode();
+    if (file && vizModeForGt === 'off') {
+        const jawGuess = file.name.startsWith('upper_') ? 'upper' : (file.name.startsWith('lower_') ? 'lower' : null);
+        if (jawGuess) {
+            let gtCached = groundTruthCache[file.name];
+            if (!gtCached) {
+                runGroundTruthLookup(file);
+                gtCached = groundTruthCache[file.name];
+            }
+            if (gtCached && gtCached.status === 'done' && gtCached.found && gtCached.teeth.length > 0
+                && gtCached.teeth[0].box) {
+                canvas.width = currentImage.width;
+                canvas.height = currentImage.height;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(currentImage, 0, 0);
+                clearComplexityStatus();
+                renderMissingStatus([]);
+
+                const analysis = chaiGtAnalysisCache[file.name];
+                if (!analysis) {
+                    runToothAnalysisGT(file, jawGuess, gtCached.teeth);
+                    return;
+                }
+                if (analysis.status === 'done') {
+                    drawChaiGtConditionedBoxes(analysis.results);
+                }
+                return;
+            }
+        }
+    }
+
     const predictions = file ? segmentationCache[file.name] : null;
 
     // Jaw (upper/lower) is determined geometrically from the arch's curvature the moment
@@ -639,11 +723,4 @@ const redrawCanvas = () => {
     const missingNumbers = computeMissingTeeth(predictions, pca, isUpper, isLower, hasClassification, file);
     renderMissingStatus(missingNumbers);
 
-    // Drawn unconditionally - the panel lives outside the image itself, so it doesn't compete
-    // with any of the debug overlays for the same pixels.
-    const complexity = file ? complexityCache[file.name] : null;
-    const complexityLabel = complexity && complexity.status === 'done'
-        ? (COMPLEXITY_LABELS[complexity.classIdx] ?? null)
-        : null;
-    drawBottomPanel(complexityLabel, missingNumbers, currentImage.width, currentImage.height);
 };

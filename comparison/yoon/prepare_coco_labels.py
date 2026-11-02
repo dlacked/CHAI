@@ -26,13 +26,18 @@ Usage:
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 YOON_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = YOON_DIR.parent.parent           # .../CHAI/CHAI
+_bootstrap_root = YOON_DIR.parent.parent        # .../CHAI/CHAI
+if str(_bootstrap_root) not in sys.path:
+    sys.path.append(str(_bootstrap_root))
+from config import PathConfig
+PROJECT_ROOT = PathConfig.ROOT                  # .../CHAI/CHAI
 DATASET_DIR = PROJECT_ROOT.parent / "dataset"   # .../CHAI/dataset
 OUT_DIR = YOON_DIR / "coco_dataset"
 
